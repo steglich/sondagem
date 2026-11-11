@@ -44,6 +44,9 @@ interface DadosConfirmacao {
           [status]="visao().status"
           [execucao]="visao().execucao"
           [parando]="visao().fase === 'parando' || encerrando()"
+          [podeTirarSnapshot]="snapshotManual()"
+          [tirandoSnapshot]="tirandoSnapshot()"
+          (tirarSnapshot)="tirarSnapshot()"
           (parar)="parar()"
           (cancelar)="cancelar()"
         />
@@ -91,6 +94,9 @@ export class Painel {
   protected readonly emAndamento = computed(() => this.visao().fase !== 'ociosa');
   protected readonly confirmacao = signal<DadosConfirmacao | null>(null);
   protected readonly encerrando = signal(false);
+  /** Só a sessão manual com "Memória" tira snapshot a pedido; em cenário, os passos decidem. */
+  protected readonly snapshotManual = computed(() => this.visao().execucao === null && this.visao().selecao.includes('memoria'));
+  protected readonly tirandoSnapshot = signal(false);
   protected readonly erro = signal<string | null>(null);
   protected readonly falhaDebugger = signal<Falha | null>(null);
 
@@ -136,6 +142,12 @@ export class Painel {
     this.encerrando.set(true);
     await this.executar(() => this.sessao.cancelar());
     this.encerrando.set(false);
+  }
+
+  protected async tirarSnapshot(): Promise<void> {
+    this.tirandoSnapshot.set(true);
+    await this.executar(() => this.sessao.tirarSnapshot());
+    this.tirandoSnapshot.set(false);
   }
 
   /** Abre a rota de relatório em uma aba própria. */

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import { formatarMs } from '../../../../shared/texto';
+import { formatarBytes, formatarMs } from '../../../../shared/texto';
 import type { EstadoExecucao, StatusResumido, VisaoSessao } from '../../../../shared/types';
 
 const ESTADOS: Record<EstadoExecucao, string> = {
@@ -51,12 +51,31 @@ const ESTADOS: Record<EstadoExecucao, string> = {
             <dt>Erros da página</dt>
             <dd data-testid="status-erros-pagina">{{ s.errosPagina }}</dd>
           }
+          @if (s.heapUsado !== null) {
+            <dt>Heap usado</dt>
+            <dd data-testid="status-heap">{{ bytes(s.heapUsado) }}</dd>
+          }
+          @if (podeTirarSnapshot()) {
+            <dt>Snapshots</dt>
+            <dd data-testid="status-snapshots">{{ s.snapshots }}</dd>
+          }
         </dl>
       }
 
       <div class="acoes">
         @if (!execucao()) {
           <button type="button" data-testid="parar" [disabled]="parando()" (click)="parar.emit()">Parar</button>
+        }
+        @if (podeTirarSnapshot()) {
+          <button
+            type="button"
+            class="secundario"
+            data-testid="tirar-snapshot"
+            [disabled]="parando() || tirandoSnapshot()"
+            (click)="tirarSnapshot.emit()"
+          >
+            {{ tirandoSnapshot() ? 'Tirando snapshot…' : 'Tirar snapshot' }}
+          </button>
         }
         <button type="button" class="secundario" data-testid="cancelar" [disabled]="parando()" (click)="cancelar.emit()">
           Cancelar
@@ -87,11 +106,16 @@ export class SessaoAtiva {
   /** Estado e progresso da execução de cenário; `null` em sessão manual. */
   readonly execucao = input<VisaoSessao['execucao']>(null);
   readonly parando = input(false);
+  /** Sessão manual com "Memória": oferece o snapshot a pedido. */
+  readonly podeTirarSnapshot = input(false);
+  readonly tirandoSnapshot = input(false);
 
+  readonly tirarSnapshot = output<void>();
   readonly parar = output<void>();
   readonly cancelar = output<void>();
 
   protected readonly ms = formatarMs;
+  protected readonly bytes = formatarBytes;
   protected readonly estado = computed(() => ESTADOS[this.execucao()?.estado ?? 'ociosa']);
   protected readonly progresso = computed(() => {
     const execucao = this.execucao();

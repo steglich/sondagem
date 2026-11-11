@@ -2,13 +2,18 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { inpDaAnalise, metricasDeCarregamento } from '../../../../shared/agregacao';
 import { descreverThrottling } from '../../../../shared/cenario';
 import { explicarDesconexao } from '../../../../shared/mensagens-debugger';
-import { formatarMs } from '../../../../shared/texto';
+import { CONSTRUTORES_EXIBIDOS, LIMITES_PADRAO } from '../../../../shared/memoria';
+import { formatarBytes, formatarMs, formatarVariacaoBytes } from '../../../../shared/texto';
 import type {
+  ClassificacaoVazamento,
   Desfecho,
   IdMetricaIteracao,
+  MetricaMemoria,
   ResultadoSessao,
+  SerieMemoria,
   TipoAnalise,
   TipoRecurso,
+  Variacao,
 } from '../../../../shared/types';
 
 const TIPOS: Record<TipoAnalise, string> = { 'sessao-manual': 'Sessão manual', cenario: 'Cenário' };
@@ -34,6 +39,16 @@ const RECURSOS: Record<TipoRecurso, string> = {
   temporizador: 'Temporizadores',
   depurador: 'Debugger anexado à aba',
 };
+
+const CLASSIFICACOES: Record<ClassificacaoVazamento, string> = {
+  'vazamento-provavel': 'Vazamento provável',
+  'sem-indicio': 'Sem indício de vazamento',
+  'dados-insuficientes': 'Dados insuficientes',
+};
+
+const SERIES: Record<MetricaMemoria, string> = { heap_usado: 'o heap', nos_dom: 'o número de nós DOM', listeners: 'o número de listeners' };
+
+const COM_SINAL = (valor: number): string => `${valor > 0 ? '+' : ''}${valor}`;
 
 const INDISPONIVEL = 'indisponível';
 
@@ -171,6 +186,125 @@ const INDISPONIVEL = 'indisponível';
         }
       }
 
+      @if (memoria(); as m) {
+        <h3>Memória</h3>
+        @if (m.classificacao; as classificacao) {
+          <p [class.aviso]="classificacao === 'vazamento-provavel'">
+            <strong data-testid="memoria-classificacao">{{ classificacoes[classificacao] }}</strong>
+          </p>
+          <p class="nota" data-testid="memoria-indicio">{{ indicio() }}</p>
+        } @else if (comMemoria()) {
+          <p class="nota" data-testid="memoria-sem-classificacao">
+            Sessão manual: não há iterações comparáveis, então o resultado não é classificado.
+          </p>
+        }
+
+        @if (serie(); as s) {
+          <h4>Por iteração</h4>
+          <table data-testid="memoria-serie">
+            <thead>
+              <tr>
+                <th scope="col">Iteração</th>
+                <th scope="col">Heap usado</th>
+                <th scope="col">Nós DOM</th>
+                <th scope="col">Listeners</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (linha of s.linhas; track linha.iteracao) {
+                <tr data-testid="memoria-iteracao">
+                  <th scope="row">{{ linha.iteracao }}</th>
+                  <td>{{ linha.heap }}</td>
+                  <td>{{ linha.nos }}</td>
+                  <td>{{ linha.listeners }}</td>
+                </tr>
+              }
+            </tbody>
+            <tfoot>
+              <tr data-testid="memoria-crescimento">
+                <th scope="row">Crescimento médio por iteração</th>
+                <td>{{ s.crescimento.heap }}</td>
+                <td>{{ s.crescimento.nos }}</td>
+                <td>{{ s.crescimento.listeners }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        }
+
+        @if (medicoesManuais(); as mm) {
+          <dl data-testid="memoria-medicoes">
+            <dt>Medições</dt>
+            <dd data-testid="memoria-medicoes-quantidade">{{ mm.quantidade }}</dd>
+            <dt>Heap usado</dt>
+            <dd>{{ mm.heap }}</dd>
+            <dt>Nós DOM</dt>
+            <dd>{{ mm.nos }}</dd>
+            <dt>Listeners</dt>
+            <dd>{{ mm.listeners }}</dd>
+          </dl>
+        }
+
+        @if (m.domListeners; as d) {
+          <h4>DOM e listeners</h4>
+          <dl data-testid="memoria-dom-listeners">
+            <dt>Nós DOM desanexados</dt>
+            <dd data-testid="memoria-nos-desanexados">{{ variacao(d.nosDesanexados, 'indisponível') }}</dd>
+            <dt>Listeners</dt>
+            <dd data-testid="memoria-listeners">{{ variacao(d.listeners, 'indisponível') }}</dd>
+          </dl>
+        }
+
+        @if (resultado().dados.snapshots.length > 0) {
+          <h4>Censos de objetos ({{ resultado().dados.snapshots.length }})</h4>
+          <ul data-testid="memoria-snapshots">
+            @for (snapshot of snapshots(); track snapshot.rotulo) {
+              <li data-testid="memoria-snapshot">
+                <span class="alvo">{{ snapshot.rotulo }}</span>
+                <span>{{ snapshot.objetos }}</span>
+              </li>
+            }
+          </ul>
+        }
+
+        @if (m.comparacao; as comparacao) {
+          <h4>Construtores que mais cresceram</h4>
+          <p class="nota" data-testid="memoria-comparacao">
+            Número de objetos vivos por construtor, entre “{{ comparacao.de }}” e “{{ comparacao.para }}”. A extensão não tem
+            acesso ao tamanho dos objetos; para isso, compare heap snapshots no DevTools.
+          </p>
+          @if (candidatos().length > 0) {
+            <table data-testid="memoria-construtores">
+              <thead>
+                <tr>
+                  <th scope="col">Construtor</th>
+                  <th scope="col">Antes</th>
+                  <th scope="col">Depois</th>
+                  <th scope="col">Variação</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (candidato of candidatos(); track candidato.nome) {
+                  <tr data-testid="memoria-construtor">
+                    <th scope="row" class="construtor">{{ candidato.nome }}</th>
+                    <td>{{ candidato.antes }}</td>
+                    <td>{{ candidato.depois }}</td>
+                    <td>{{ candidato.variacao }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          } @else {
+            <p data-testid="memoria-sem-crescimento">Nenhum construtor ganhou objetos entre os dois censos.</p>
+          }
+        }
+
+        @if (semDadosDeMemoria()) {
+          <p class="nota" data-testid="memoria-sem-dados">
+            Nenhuma medição de memória foi feita: o cenário não tem passos medir ou snapshot.
+          </p>
+        }
+      }
+
       @if (resultado().desfecho !== 'cancelada') {
         @if (comCarregamento()) {
           <h3>Carregamento</h3>
@@ -205,6 +339,9 @@ const INDISPONIVEL = 'indisponível';
             @for (tarefa of resultado().dados.longTasks; track $index) {
               <li data-testid="long-task">
                 <span>{{ segundos(tarefa.inicio) }}</span>
+                @if (tarefa.causadaPelaMedicao) {
+                  <span class="alvo nota" data-testid="long-task-da-medicao">causada pelo censo de objetos, fora das estatísticas</span>
+                }
                 <span>{{ ms(tarefa.duracao) }}</span>
               </li>
             } @empty {
@@ -294,6 +431,10 @@ const INDISPONIVEL = 'indisponível';
     th:first-child {
       text-align: left;
     }
+    .construtor {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     thead th {
       opacity: 0.7;
     }
@@ -318,6 +459,110 @@ export class Resultado {
   protected readonly comCarregamento = computed(() => this.resultado().selecao.includes('carregamento'));
   protected readonly comProcessamento = computed(() => this.resultado().selecao.includes('processamento'));
   protected readonly comErrosPagina = computed(() => this.resultado().selecao.includes('erros-pagina'));
+
+  protected readonly comMemoria = computed(() => this.resultado().selecao.includes('memoria'));
+  protected readonly classificacoes = CLASSIFICACOES;
+
+  /** Análise de memória; `null` sem as verificações ou em análise cancelada. */
+  protected readonly memoria = computed(() => (this.resultado().desfecho === 'cancelada' ? null : this.resultado().memoria));
+
+  private serieDe(metrica: MetricaMemoria): SerieMemoria | undefined {
+    return this.memoria()?.series.find((s) => s.metrica === metrica);
+  }
+
+  /** O que sustenta a classificação. "Vazamento provável" é sempre apresentado como indício. */
+  protected readonly indicio = computed(() => {
+    switch (this.memoria()?.classificacao) {
+      case 'vazamento-provavel': {
+        const sinais = (this.memoria()?.series ?? [])
+          .filter((serie) => serie.classificacao === 'vazamento-provavel')
+          .map((serie) => {
+            const pontos = serie.pontos;
+            const total = pontos[pontos.length - 1]!.valor - pontos[0]!.valor;
+            const quanto = serie.metrica === 'heap_usado' ? formatarVariacaoBytes(total) : COM_SINAL(total);
+            return `${SERIES[serie.metrica]} subiu em ${serie.transicoesCrescentes} de ${pontos.length - 1} transições (${quanto} no total)`;
+          });
+        return (
+          `Medido depois de cada iteração: ${sinais.join('; ')}. Isto é um indício, não uma confirmação: confirme analisando os ` +
+          'objetos dos construtores listados abaixo, por exemplo comparando heap snapshots no DevTools.'
+        );
+      }
+      case 'sem-indicio':
+        return 'Heap, nós DOM e listeners não cresceram de forma consistente entre as iterações.';
+      case 'dados-insuficientes':
+        return `São necessárias ao menos ${LIMITES_PADRAO.iteracoesMinimas} iterações completas, cada uma com um passo medir, para classificar.`;
+      default:
+        return '';
+    }
+  });
+
+  /** Tabela por iteração: uma linha para cada iteração que tem algum ponto. */
+  protected readonly serie = computed(() => {
+    const heap = this.serieDe('heap_usado');
+    const nos = this.serieDe('nos_dom');
+    const listeners = this.serieDe('listeners');
+    const numeros = [...new Set([heap, nos, listeners].flatMap((s) => s?.pontos.map((p) => p.iteracao) ?? []))].sort((a, b) => a - b);
+    if (numeros.length === 0) return null;
+    const valor = (s: SerieMemoria | undefined, iteracao: number): number | undefined => s?.pontos.find((p) => p.iteracao === iteracao)?.valor;
+    const texto = (v: number | undefined, formatar: (v: number) => string): string => (v === undefined ? '—' : formatar(v));
+    const media = (s: SerieMemoria | undefined, formatar: (v: number) => string): string =>
+      s?.crescimentoMedio === null || s?.crescimentoMedio === undefined ? '—' : formatar(s.crescimentoMedio);
+    const contagem = (v: number): string => COM_SINAL(Math.round(v * 10) / 10);
+    return {
+      linhas: numeros.map((iteracao) => ({
+        iteracao,
+        heap: texto(valor(heap, iteracao), formatarBytes),
+        nos: texto(valor(nos, iteracao), String),
+        listeners: texto(valor(listeners, iteracao), String),
+      })),
+      crescimento: {
+        heap: media(heap, (v) => formatarVariacaoBytes(Math.round(v))),
+        nos: media(nos, contagem),
+        listeners: media(listeners, contagem),
+      },
+    };
+  });
+
+  /** Sessão manual: as medições periódicas, do primeiro ao último valor. */
+  protected readonly medicoesManuais = computed(() => {
+    const medicoes = this.resultado().dados.medicoes;
+    if (this.resultado().tipo !== 'sessao-manual' || !this.memoria() || medicoes.length === 0) return null;
+    const primeira = medicoes[0]!;
+    const ultima = medicoes[medicoes.length - 1]!;
+    const intervalo = (de: number | null, ate: number | null, formatar: (v: number) => string): string =>
+      de === null || ate === null ? INDISPONIVEL : `${formatar(de)} → ${formatar(ate)}`;
+    return {
+      quantidade: medicoes.length,
+      heap: intervalo(primeira.heapUsado, ultima.heapUsado, formatarBytes),
+      nos: intervalo(primeira.nosDom, ultima.nosDom, String),
+      listeners: intervalo(primeira.listeners, ultima.listeners, String),
+    };
+  });
+
+  protected readonly snapshots = computed(() =>
+    this.resultado().dados.snapshots.map((s) => ({ rotulo: s.rotulo, objetos: `${s.totalObjetos} objetos` })),
+  );
+
+  /** Os construtores que mais cresceram: os candidatos a analisar. */
+  protected readonly candidatos = computed(() =>
+    (this.memoria()?.comparacao?.construtores ?? [])
+      .filter((c) => c.contagem.variacao > 0)
+      .slice(0, CONSTRUTORES_EXIBIDOS)
+      .map((c) => ({
+        nome: c.situacao === 'novo' ? `${c.nome} (novo)` : c.nome,
+        antes: c.contagem.antes,
+        depois: c.contagem.depois,
+        variacao: COM_SINAL(c.contagem.variacao),
+      })),
+  );
+
+  protected readonly semDadosDeMemoria = computed(
+    () => this.comMemoria() && this.resultado().dados.medicoes.length === 0 && this.resultado().dados.snapshots.length === 0,
+  );
+
+  protected variacao(valor: Variacao | null, ausente: string): string {
+    return valor === null ? ausente : `${valor.antes} → ${valor.depois} (${COM_SINAL(valor.variacao)})`;
+  }
 
   protected readonly conexaoPerdida = computed(() => {
     const motivo = this.resultado().conexaoPerdida;

@@ -1,6 +1,18 @@
-/** Transporte de CDP e relógio simulados para os testes unitários do service worker. */
+/** Transporte de CDP, relógio e página simulados para os testes unitários do service worker. */
 import type { MotivoDesconexao } from '../shared/types.ts';
 import type { TransporteCdp } from './cdp.ts';
+import { GRUPO_COLETA, contarPorConstrutor } from './memoria.ts';
+
+/** `true` se o comando é a consulta que força a coleta de lixo (passo `forcar_gc`). */
+export function ehColeta(metodo: string, parametros: Record<string, unknown> | object | undefined): boolean {
+  return metodo === 'Runtime.queryObjects' && (parametros as Record<string, unknown> | undefined)?.['objectGroup'] === GRUPO_COLETA;
+}
+
+/** Comandos de CDP que só a medição de memória envia. */
+export const DE_MEMORIA = /^(Performance|DOM)\.|^Runtime\.(queryObjects|callFunctionOn|releaseObjectGroup)$/;
+
+class Item {}
+class Painel {}
 
 export interface TransporteFalso extends TransporteCdp {
   /** Abas com o debugger desta extensão anexado. */
@@ -116,6 +128,14 @@ export function criarPagina(transporte: TransporteFalso) {
     aoComando: null as ((metodo: string, parametros: Record<string, unknown>) => void) | null,
     erroDeNavegacao: null as string | null,
     carregarAoNavegar: true,
+    /** O que `Performance.getMetrics` e `DOM.getDetachedDomNodes` devolvem. */
+    memoria: { heap: 1_000_000, nos: 50, listeners: 10, desanexados: 0 },
+    /** Objetos "vivos" da página: é sobre eles que a função do censo roda de verdade. */
+    objetos: [new Item(), new Item(), new Item(), new Painel(), [1, 2], {}, () => undefined] as unknown[],
+    /** Exceção que a página lança durante a contagem do censo. */
+    erroNoCenso: null as string | null,
+    /** Quando `true`, a contagem do censo nunca responde. */
+    censoTravado: false,
   };
   const seletorDe = (expressao: string): string => JSON.parse(/querySelector\(("(?:[^"\\]|\\.)*")\)/.exec(expressao)![1]!) as string;
 
@@ -128,9 +148,32 @@ export function criarPagina(transporte: TransporteFalso) {
       return { frameId: 'F', loaderId: 'L' };
     }
     if (metodo === 'Browser.getVersion') return { product: 'Chrome/158.0.8127.18' };
+    if (metodo === 'Performance.getMetrics') {
+      return {
+        metrics: [
+          { name: 'JSEventListeners', value: pagina.memoria.listeners },
+          { name: 'Nodes', value: pagina.memoria.nos },
+          { name: 'JSHeapUsedSize', value: pagina.memoria.heap },
+        ],
+      };
+    }
+    if (metodo === 'DOM.getDetachedDomNodes') {
+      // Uma árvore por nó, como o navegador devolve: `treeNode` é a raiz, com os descendentes.
+      return {
+        detachedNodes: Array.from({ length: pagina.memoria.desanexados }, (_, i) => ({ treeNode: { nodeId: i + 1, nodeName: 'LI' }, retainedNodeIds: [] })),
+      };
+    }
+    if (metodo === 'Runtime.queryObjects') return { objects: { objectId: 'lista' } };
+    if (metodo === 'Runtime.callFunctionOn') {
+      if (pagina.censoTravado) return new Promise(() => undefined);
+      if (pagina.erroNoCenso) return { exceptionDetails: { text: 'Uncaught', exception: { description: pagina.erroNoCenso } } };
+      const limite = (p['arguments'] as { value: number }[])[0]!.value;
+      return { result: { value: contarPorConstrutor.call(pagina.objetos, limite) } };
+    }
     if (metodo !== 'Runtime.evaluate') return {};
 
     const expressao = String(p['expression']);
+    if (expressao === 'Object.prototype') return { result: { objectId: 'prototipo' } };
     if (expressao.includes('navigator.userAgent')) {
       return { result: { value: { ua: 'Mozilla/5.0 Chrome/158.0.0.0 Safari/537.36', largura: 1280, altura: 720, dpr: 2 } } };
     }

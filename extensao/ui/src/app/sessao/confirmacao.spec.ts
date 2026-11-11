@@ -175,6 +175,64 @@ describe('Confirmacao', () => {
       expect(porId(fixture, 'confirmacao-impedimento').textContent).toContain('número inteiro de iterações');
     });
 
+    describe('aviso de memória', () => {
+      const COM_MEMORIA: Cenario = {
+        ...CENARIO_TESTE,
+        passos: [
+          { tipo: 'forcar_gc' },
+          { tipo: 'snapshot', rotulo: 'inicio' },
+          { tipo: 'repetir', vezes: 'iteracoes', passos: [{ tipo: 'clicar', seletor: '#abrir' }, { tipo: 'medir', metricas: ['heap_usado'] }] },
+          { tipo: 'snapshot', rotulo: 'fim' },
+        ],
+      };
+      const TUDO: Selecao = ['processamento', 'carregamento', 'erros-pagina', 'memoria', 'dom-listeners'];
+
+      it('oferece "Memória" e "DOM e listeners" entre as verificações', () => {
+        const fixture = montar({ cenario: COM_MEMORIA, selecaoCenario: TUDO });
+        expect(porId<HTMLInputElement>(fixture, 'verificacao-memoria').checked).toBe(true);
+        expect(porId<HTMLInputElement>(fixture, 'verificacao-dom-listeners').checked).toBe(true);
+        expect(fixture.nativeElement.textContent).toContain('Memória');
+        expect(fixture.nativeElement.textContent).toContain('DOM e listeners');
+        expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(false);
+      });
+
+      it('desmarcar "Memória" avisa que o vazamento não será confirmado, sem bloquear a execução', () => {
+        const fixture = montar({ cenario: COM_MEMORIA, selecaoCenario: TUDO });
+        const confirmadas: AnaliseConfirmada[] = [];
+        fixture.componentInstance.confirmar.subscribe((analise) => confirmadas.push(analise));
+
+        porId<HTMLInputElement>(fixture, 'verificacao-memoria').click();
+        fixture.detectChanges();
+
+        expect(porId(fixture, 'confirmacao-aviso-memoria').textContent).toContain('um vazamento não será confirmado');
+        expect(existe(fixture, 'confirmacao-impedimento')).toBe(false);
+        expect(porId<HTMLButtonElement>(fixture, 'confirmar').disabled).toBe(false);
+
+        porId<HTMLButtonElement>(fixture, 'confirmar').click();
+        expect(confirmadas).toEqual([
+          expect.objectContaining({ modo: 'cenario', selecao: ['processamento', 'carregamento', 'erros-pagina', 'dom-listeners'] }),
+        ]);
+
+        // Marcar de novo tira o aviso.
+        porId<HTMLInputElement>(fixture, 'verificacao-memoria').click();
+        fixture.detectChanges();
+        expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(false);
+      });
+
+      it('cenário sem passos de memória não avisa', () => {
+        const fixture = montar({ cenario: CENARIO_TESTE, selecaoCenario: ['processamento'] });
+        expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(false);
+      });
+
+      it('na sessão manual o aviso não se aplica', () => {
+        const fixture = montar({ cenario: COM_MEMORIA, selecaoCenario: ['processamento'] });
+        expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(true);
+        porId<HTMLInputElement>(fixture, 'modo-manual').click();
+        fixture.detectChanges();
+        expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(false);
+      });
+    });
+
     it('trocar para sessão manual esconde o resumo do cenário e usa a seleção da sessão manual', () => {
       const fixture = montar({ cenario: CENARIO_TESTE, selecaoInicial: ['carregamento'], selecaoCenario: ['processamento'] });
       const emitidas: AnaliseConfirmada[] = [];

@@ -57,7 +57,7 @@ Um cenário é um arquivo JSON, versionável e editável à mão, que descreve o
 
 Todo passo tem `tipo`. Os passos de ação e de medição aceitam também:
 
-- `tempo_limite_ms`: tempo limite do passo. Padrão: 10000.
+- `tempo_limite_ms`: tempo limite do passo. Padrão: 10000 (120000 no passo `snapshot`).
 - `em_erro`: o que fazer se o passo falhar. `interromper` (padrão) encerra a execução; `pular` segue para o próximo passo e marca a iteração como incompleta, fora das estatísticas; `repetir` tenta de novo até 2 vezes e, se o erro persistir, interrompe.
 
 ### Passos de ação
@@ -87,13 +87,33 @@ Prefira seletores estáveis, como `[data-testid='...']`.
 
 ### Passos de medição
 
-| Tipo | Campos | Observação |
+| Tipo | Campos | O que faz |
 |---|---|---|
-| `medir` | `metricas`: lista com `heap_usado`, `nos_dom`, `listeners` | Leve, em cada iteração. |
-| `snapshot` | `rotulo`, único entre os snapshots | Pesado, no início e no fim. |
-| `forcar_gc` | — | Costuma aparecer duas vezes seguidas, porque uma coleta nem sempre libera tudo. |
+| `medir` | `metricas`: lista com `heap_usado`, `nos_dom`, `listeners` | Registra, na iteração corrente, o heap de JavaScript em uso (bytes), o número de nós DOM e o de listeners. Leve: use em toda iteração. |
+| `snapshot` | `rotulo`, único entre os snapshots | Faz um censo: quantos objetos vivos a página tem de cada construtor. Mais pesado: use no início e no fim. |
+| `forcar_gc` | — | Força uma coleta de lixo completa e espera terminar. Costuma aparecer duas vezes seguidas, porque uma coleta nem sempre libera tudo. |
 
-Os passos de medição só rodam se a verificação correspondente estiver marcada. Eles dependem da verificação de memória, que chega na fase 3: até lá são aceitos pelo esquema e ignorados na execução.
+Os três só rodam com a verificação "Memória" marcada. Com ela desmarcada são ignorados (os passos de ação rodam normalmente) e a confirmação avisa que um vazamento não será confirmado.
+
+#### O que o resultado traz
+
+- **Série por iteração**: o valor de cada métrica na última medição de cada iteração completa, e o crescimento médio por iteração. Para a série fazer sentido, ponha `forcar_gc` (duas vezes) antes do `medir`, como no exemplo.
+- **Classificação**: "vazamento provável" se o heap, os nós DOM ou os listeners subirem em pelo menos 80% das transições entre iterações consecutivas e acima de um mínimo no total (100 KB de heap; 3 nós ou listeners). "Sem indício de vazamento" caso contrário. Com menos de 5 iterações completas, "dados insuficientes". É um indício: a confirmação depende de analisar os objetos.
+- **Construtores que mais cresceram**: a diferença de contagem entre o primeiro e o último `snapshot` da execução, do que mais ganhou objetos para o que mais perdeu.
+
+#### Limites do censo
+
+O `snapshot` não é um heap snapshot do DevTools: o navegador não oferece o heap profiler a extensões. O censo traz só a **contagem** de objetos por construtor, sem tamanho próprio nem tamanho retido, e sem o caminho de retenção. Para isso, compare heap snapshots no DevTools, guiado pelos construtores que a Sondagem apontou.
+
+- Conta os objetos JavaScript vivos do mundo principal da página. Objetos criados com `Object.create(null)` ficam de fora.
+- Um nó DOM entra na contagem (como `HTMLLIElement`, por exemplo) se a página o criou ou tocou por script.
+- Classes com o mesmo nome em módulos diferentes são somadas; classes sem nome aparecem como "(anônimo)".
+- O resumo guarda os 500 construtores com mais objetos e soma o resto em "(outros)".
+- A contagem roda na página e lê `constructor.name` de cada objeto, o que pode acionar um getter da aplicação. Nada é escrito na página.
+
+#### "DOM e listeners"
+
+A verificação "DOM e listeners" não depende de passos do cenário: com ela marcada, a extensão conta os nós DOM desanexados (fora do documento, mas ainda na memória) e os listeners depois do aquecimento e no fim da execução, sempre depois de uma coleta de lixo, e reporta a variação.
 
 ## Regras de validação
 

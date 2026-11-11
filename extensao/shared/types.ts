@@ -14,7 +14,7 @@ import type { Resumo } from './stats.ts';
 // Verificações
 // ---------------------------------------------------------------------------
 
-export type IdVerificacao = 'processamento' | 'carregamento' | 'erros-pagina';
+export type IdVerificacao = 'processamento' | 'carregamento' | 'erros-pagina' | 'memoria' | 'dom-listeners';
 
 /** O que uma verificação precisa para rodar: só código na página, ou o debugger anexado à aba. */
 export type Exigencia = 'pagina' | 'debugger';
@@ -57,6 +57,8 @@ export interface LongTask {
   inicio: number;
   duracao: number;
   iteracao?: IteracaoDoRegistro;
+  /** `true` se coincidiu com um censo de objetos: a pausa é da medição, não da página. Fica fora das estatísticas. */
+  causadaPelaMedicao?: boolean;
 }
 
 export interface Interacao {
@@ -119,6 +121,117 @@ export interface DadosColetados {
   documentos: DocumentoObservado[];
   /** Só é preenchido com a verificação "Erros da página" marcada. */
   errosPagina: ErroPagina[];
+  /** Medições leves de memória: uma por passo `medir`, ou uma a cada 5 s na sessão manual. */
+  medicoes: MedicaoMemoria[];
+  /** Censos de objetos por construtor (passo `snapshot`), na ordem em que foram feitos. */
+  snapshots: ResumoSnapshot[];
+  /** Intervalos em que a página ficou parada por um censo. */
+  pausasDeMedicao: Intervalo[];
+  /** Contadores lidos no início e no fim da análise, com "DOM e listeners" marcada. */
+  contadoresDom: { inicio: ContadoresDom | null; fim: ContadoresDom | null };
+}
+
+// ---------------------------------------------------------------------------
+// Memória
+// ---------------------------------------------------------------------------
+
+export type MetricaMemoria = 'heap_usado' | 'nos_dom' | 'listeners';
+
+/** Medição leve, sem percorrer o heap. Métrica não pedida fica `null`. */
+export interface MedicaoMemoria {
+  /** ms desde a época. */
+  instante: number;
+  /** Bytes em uso no heap de JavaScript da página. */
+  heapUsado: number | null;
+  nosDom: number | null;
+  listeners: number | null;
+  iteracao?: IteracaoDoRegistro;
+}
+
+export interface ContadoresDom {
+  nosDom: number;
+  listeners: number;
+  /** Nós DOM fora do documento que continuam na memória; `null` se o navegador não informou. */
+  nosDesanexados: number | null;
+}
+
+export interface ResumoConstrutor {
+  nome: string;
+  /** Quantidade de objetos vivos. */
+  contagem: number;
+}
+
+/** O que o censo devolve da página: só a tabela de contagens, nada do heap. */
+export interface DadosCenso {
+  totalObjetos: number;
+  /** Os construtores com mais objetos, em ordem decrescente. */
+  construtores: ResumoConstrutor[];
+  /** Soma dos construtores que ficaram fora da lista; `null` se todos couberam. */
+  outros: ResumoConstrutor | null;
+}
+
+/** Resumo produzido por um passo `snapshot`: o censo de objetos por construtor naquele instante. */
+export interface ResumoSnapshot extends DadosCenso {
+  rotulo: string;
+  /** ms desde a época. */
+  instante: number;
+  iteracao?: IteracaoDoRegistro;
+}
+
+/** Valor antes e depois, com a diferença. */
+export interface Variacao {
+  antes: number;
+  depois: number;
+  variacao: number;
+}
+
+export interface VariacaoConstrutor {
+  nome: string;
+  /** `novo`: só no último censo; `removido`: só no primeiro. */
+  situacao: 'ambos' | 'novo' | 'removido';
+  contagem: Variacao;
+}
+
+/** Diferença entre o primeiro e o último censo da análise. */
+export interface ComparacaoSnapshots {
+  de: string;
+  para: string;
+  /** Do que mais ganhou objetos para o que mais perdeu. */
+  construtores: VariacaoConstrutor[];
+}
+
+export type ClassificacaoVazamento = 'vazamento-provavel' | 'sem-indicio' | 'dados-insuficientes';
+
+export interface PontoDaSerie {
+  iteracao: number;
+  valor: number;
+}
+
+/** Uma métrica medida depois de cada iteração completa. */
+export interface SerieMemoria {
+  metrica: MetricaMemoria;
+  pontos: PontoDaSerie[];
+  /** (último − primeiro) ÷ transições; `null` com menos de dois pontos. */
+  crescimentoMedio: number | null;
+  /** Transições entre iterações consecutivas em que o valor subiu. */
+  transicoesCrescentes: number;
+  classificacao: ClassificacaoVazamento;
+}
+
+export interface VariacaoDomListeners {
+  /** Do início para o fim da análise; `null` se os contadores não foram lidos. */
+  nosDesanexados: Variacao | null;
+  listeners: Variacao | null;
+}
+
+/** Parte do resultado que só existe com "Memória" ou "DOM e listeners" marcadas. */
+export interface AnaliseMemoria {
+  /** Dada pela série de heap usado. `null` na sessão manual, que não tem iterações comparáveis. */
+  classificacao: ClassificacaoVazamento | null;
+  series: SerieMemoria[];
+  comparacao: ComparacaoSnapshots | null;
+  /** Só com "DOM e listeners" marcada. */
+  domListeners: VariacaoDomListeners | null;
 }
 
 /** O que a interface mostra enquanto a análise roda. Os registros detalhados só vão ao término. */
@@ -129,6 +242,9 @@ export interface StatusResumido {
   piorLongTask: number | null;
   carregamentos: number;
   errosPagina: number;
+  /** Heap usado na medição mais recente, ou `null` se ainda não houve nenhuma. */
+  heapUsado: number | null;
+  snapshots: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +416,7 @@ export interface ResultadoSessao {
   /** Motivo da desconexão do debugger, quando foi ela que interrompeu a análise. */
   conexaoPerdida: MotivoDesconexao | null;
   cenario: ResultadoCenario | null;
+  memoria: AnaliseMemoria | null;
 }
 
 /** Estado gravado pelo service worker em `chrome.storage.session`. */
@@ -370,7 +487,9 @@ export type ComandoInterface =
   | { tipo: 'obter-visao' }
   | { tipo: 'iniciar'; idAba: number; selecao: Selecao; cenario?: PedidoCenario }
   | { tipo: 'parar' }
-  | { tipo: 'cancelar' };
+  | { tipo: 'cancelar' }
+  /** Sessão manual com "Memória": faz um censo de objetos agora. */
+  | { tipo: 'tirar-snapshot' };
 
 export type MotivoRecusa =
   | 'sessao-ativa'
@@ -379,6 +498,7 @@ export type MotivoRecusa =
   | 'url-nao-suportada'
   | 'cenario-invalido'
   | 'debugger'
+  | 'snapshot'
   | 'erro';
 
 export type RespostaComando =

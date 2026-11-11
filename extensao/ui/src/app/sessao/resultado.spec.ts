@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
+import { dadosVazios } from '../../../../shared/agregacao';
 import { describe, expect, it } from 'vitest';
 import type { ResultadoSessao } from '../../../../shared/types';
-import { RESULTADO_CENARIO_FIXO, RESULTADO_FIXO } from './apoio-teste';
+import { RESULTADO_CENARIO_FIXO, RESULTADO_FIXO, RESULTADO_MEMORIA_FIXO } from './apoio-teste';
 import { Resultado } from './resultado';
 
 function montar(resultado: ResultadoSessao) {
@@ -92,7 +93,7 @@ describe('Resultado', () => {
     const { texto, existe, textos } = montar({
       ...RESULTADO_FIXO,
       desfecho: 'cancelada',
-      dados: { longTasks: [], interacoes: [], documentos: [], errosPagina: [] },
+      dados: dadosVazios(),
     });
     expect(texto('resultado-desfecho')).toBe('Análise cancelada');
     expect(existe('lista-long-tasks')).toBe(false);
@@ -190,6 +191,132 @@ describe('Resultado', () => {
     it('lista o debugger entre o que foi removido', () => {
       const { textos } = montar(RESULTADO_CENARIO_FIXO);
       expect(textos('item-limpeza')).toContain('Debugger anexado à aba 1');
+    });
+  });
+
+  describe('memória', () => {
+    it('apresenta "vazamento provável" como indício que depende de análise dos objetos', () => {
+      const { texto } = montar(RESULTADO_MEMORIA_FIXO);
+      expect(texto('memoria-classificacao')).toBe('Vazamento provável');
+      const indicio = texto('memoria-indicio')!;
+      expect(indicio).toContain('o heap subiu em 5 de 5 transições (+300.0 KB no total); o número de nós DOM subiu em 5 de 5 transições (+2020 no total)');
+      expect(indicio).toContain('Isto é um indício, não uma confirmação');
+      expect(indicio).toContain('confirme analisando os objetos dos construtores listados abaixo');
+    });
+
+    it('mostra a série por iteração em tabela, com o crescimento médio', () => {
+      const { textos } = montar(RESULTADO_MEMORIA_FIXO);
+      const linhas = textos('memoria-iteracao');
+      expect(linhas).toHaveLength(6);
+      expect(linhas[0]).toBe('1 1.95 MB 850 15');
+      expect(linhas[5]).toBe('6 2.25 MB 2870 15');
+      expect(textos('memoria-crescimento')).toEqual(['Crescimento médio por iteração +60.0 KB +404 0']);
+    });
+
+    it('mostra a variação de nós desanexados e de listeners', () => {
+      const { texto } = montar(RESULTADO_MEMORIA_FIXO);
+      expect(texto('memoria-nos-desanexados')).toBe('203 → 1421 (+1218)');
+      expect(texto('memoria-listeners')).toBe('15 → 15 (0)');
+    });
+
+    it('lista os 20 construtores que mais cresceram, e só os que cresceram', () => {
+      const { textos } = montar(RESULTADO_MEMORIA_FIXO);
+      const linhas = textos('memoria-construtor');
+      // A comparação tem 21 que cresceram e 1 que diminuiu.
+      expect(linhas).toHaveLength(20);
+      expect(linhas[0]).toBe('HTMLLIElement 200 1400 +1200');
+      expect(linhas[1]).toBe('Classe1 (novo) 0 30 +30');
+      expect(linhas[19]).toBe('Classe19 10 12 +2');
+      expect(linhas.join(' ')).not.toContain('Temporario');
+    });
+
+    it('diz que a lista é por número de objetos e remete ao DevTools para o tamanho', () => {
+      const { texto } = montar(RESULTADO_MEMORIA_FIXO);
+      expect(texto('memoria-comparacao')).toContain('Número de objetos vivos por construtor, entre “inicio” e “fim”');
+      expect(texto('memoria-comparacao')).toContain('não tem acesso ao tamanho dos objetos');
+    });
+
+    it('lista os censos com o rótulo e o total de objetos', () => {
+      const { textos } = montar(RESULTADO_MEMORIA_FIXO);
+      expect(textos('memoria-snapshot')).toEqual(['inicio 1434 objetos', 'fim 2652 objetos']);
+    });
+
+    it('sem indício e dados insuficientes têm o seu texto, sem tom de alerta', () => {
+      const com = (classificacao: 'sem-indicio' | 'dados-insuficientes') =>
+        montar({ ...RESULTADO_MEMORIA_FIXO, memoria: { ...RESULTADO_MEMORIA_FIXO.memoria!, classificacao } });
+      expect(com('sem-indicio').texto('memoria-classificacao')).toBe('Sem indício de vazamento');
+      expect(com('sem-indicio').texto('memoria-indicio')).toBe('Heap, nós DOM e listeners não cresceram de forma consistente entre as iterações.');
+      expect(com('dados-insuficientes').texto('memoria-classificacao')).toBe('Dados insuficientes');
+      expect(com('dados-insuficientes').texto('memoria-indicio')).toContain('ao menos 5 iterações completas');
+    });
+
+    it('nenhum construtor cresceu: diz isso em vez de uma tabela vazia', () => {
+      const memoria = RESULTADO_MEMORIA_FIXO.memoria!;
+      const { existe, texto } = montar({
+        ...RESULTADO_MEMORIA_FIXO,
+        memoria: { ...memoria, comparacao: { ...memoria.comparacao!, construtores: memoria.comparacao!.construtores.slice(-1) } },
+      });
+      expect(existe('memoria-construtores')).toBe(false);
+      expect(texto('memoria-sem-crescimento')).toBe('Nenhum construtor ganhou objetos entre os dois censos.');
+    });
+
+    it('só com "DOM e listeners": mostra a variação, sem classificação nem série', () => {
+      const { existe, texto } = montar({
+        ...RESULTADO_MEMORIA_FIXO,
+        selecao: ['dom-listeners'],
+        memoria: { classificacao: null, series: [], comparacao: null, domListeners: { nosDesanexados: null, listeners: { antes: 16, depois: 26, variacao: 10 } } },
+      });
+      expect(existe('memoria-classificacao')).toBe(false);
+      expect(existe('memoria-sem-classificacao')).toBe(false);
+      expect(existe('memoria-serie')).toBe(false);
+      expect(texto('memoria-listeners')).toBe('16 → 26 (+10)');
+      expect(texto('memoria-nos-desanexados')).toBe('indisponível');
+    });
+
+    it('sessão manual: medições e snapshots, sem classificação de vazamento', () => {
+      const { existe, texto } = montar({
+        ...RESULTADO_FIXO,
+        selecao: ['memoria'],
+        dados: {
+          ...RESULTADO_FIXO.dados,
+          medicoes: [
+            { instante: 1000, heapUsado: 1024 * 1024, nosDom: 50, listeners: 10 },
+            { instante: 6000, heapUsado: 2 * 1024 * 1024, nosDom: 80, listeners: 12 },
+          ],
+          snapshots: [RESULTADO_MEMORIA_FIXO.dados.snapshots[0]!],
+        },
+        memoria: { classificacao: null, series: [], comparacao: null, domListeners: null },
+      });
+      expect(existe('memoria-classificacao')).toBe(false);
+      expect(texto('memoria-sem-classificacao')).toContain('não é classificado');
+      expect(texto('memoria-medicoes-quantidade')).toBe('2');
+      expect(texto('memoria-medicoes')).toContain('1.00 MB → 2.00 MB');
+      expect(existe('memoria-snapshot')).toBe(true);
+      expect(existe('memoria-serie')).toBe(false);
+    });
+
+    it('cenário sem passos de memória: diz que nada foi medido', () => {
+      const { texto } = montar({
+        ...RESULTADO_CENARIO_FIXO,
+        selecao: ['memoria'],
+        memoria: { classificacao: 'dados-insuficientes', series: [], comparacao: null, domListeners: null },
+      });
+      expect(texto('memoria-sem-dados')).toContain('Nenhuma medição de memória');
+    });
+
+    it('sem as verificações de memória, ou com a análise cancelada, a seção não aparece', () => {
+      expect(montar(RESULTADO_CENARIO_FIXO).existe('memoria-classificacao')).toBe(false);
+      const cancelada = montar({ ...RESULTADO_MEMORIA_FIXO, desfecho: 'cancelada', memoria: null });
+      expect(cancelada.existe('memoria-classificacao')).toBe(false);
+      expect(cancelada.existe('memoria-serie')).toBe(false);
+    });
+
+    it('marca a long task causada pelo heap snapshot', () => {
+      const { textos } = montar({
+        ...RESULTADO_FIXO,
+        dados: { ...RESULTADO_FIXO.dados, longTasks: [{ inicio: 3000, duracao: 900, causadaPelaMedicao: true }, { inicio: 6500, duracao: 75 }] },
+      });
+      expect(textos('long-task')).toEqual(['2.0 s causada pelo censo de objetos, fora das estatísticas 900.0 ms', '5.5 s 75.0 ms']);
     });
   });
 

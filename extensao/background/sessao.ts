@@ -18,6 +18,7 @@ import { ESTADOS_FINAIS } from '../shared/execucao-estado.ts';
 import { type Limitador, criarLimitador } from '../shared/limitador.ts';
 import { comecarParada, concluir, estadoInicial, iniciar, visaoDe } from '../shared/sessao-estado.ts';
 import { FALHAS_DE_ANEXACAO } from '../shared/mensagens-debugger.ts';
+import { INTERVALO_MEDICAO_MANUAL_MS, METRICAS_MEMORIA } from '../shared/memoria.ts';
 import {
   type ComandoInterface,
   type ConfiguracaoExecucao,
@@ -39,6 +40,7 @@ import {
 import { avaliarUrl } from '../shared/url.ts';
 import { normalizarSelecao, verificacoesComDebugger } from '../shared/verificacoes.ts';
 import { type ConexaoCdp, FalhaAnexacao } from './cdp.ts';
+import { type ContextoMemoria, lerContadoresDom, medirMemoria, tirarSnapshot } from './memoria.ts';
 import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, type Relogio, executarCenario, relogioReal } from './scenarios.ts';
 
 export const ID_SCRIPT_SESSAO = 'sondagem-sessao';
@@ -69,6 +71,8 @@ export interface AmbienteSessao {
   soltarDepurador(idAba: number): Promise<boolean>;
   /** Relógio do runner. O padrão usa temporizadores reais. */
   relogio?: Relogio;
+  /** Repete a ação a cada `ms` e devolve quem cancela. O padrão é `setInterval`. */
+  repetir?: (acao: () => void, ms: number) => () => void;
 }
 
 /** Porta aberta pelo código injetado, já reduzida ao que a orquestração usa. */
@@ -101,6 +105,7 @@ const MENSAGENS: Record<MotivoRecusa, string> = {
   'url-nao-suportada': 'Esta página não pode ser analisada.',
   'cenario-invalido': 'O cenário é inválido.',
   debugger: 'Não foi possível anexar o debugger à aba.',
+  snapshot: 'Não foi possível tirar o snapshot.',
   erro: 'Não foi possível iniciar a análise.',
 };
 
@@ -157,6 +162,16 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
   let execucao: Execucao | null = null;
   /** Fim da última long task recebida da página, para o passo `aguardar_inatividade`. */
   let fimUltimaLongTask: number | null = null;
+  /** Cancela as medições periódicas da sessão manual com "Memória". */
+  let pararMedicoes: (() => void) | null = null;
+  /** `true` enquanto um snapshot pedido pelo usuário está em curso: a medição periódica espera. */
+  let tirandoSnapshot = false;
+  const repetir =
+    ambiente.repetir ??
+    ((acao: () => void, ms: number) => {
+      const id = setInterval(acao, ms);
+      return () => clearInterval(id);
+    });
   const relogio: Relogio = ambiente.relogio ?? { ...relogioReal, agora: () => ambiente.agora() };
 
   const limitador: Limitador = criarLimitador(INTERVALO_LOTE_MS, () => ambiente.publicar(visaoDe(estado)), ambiente.agora);
@@ -218,6 +233,50 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     await cdp.enviar('Runtime.enable');
   }
 
+  function contextoMemoria(sessao: SessaoEmAndamento, cdp: ConexaoCdp): ContextoMemoria {
+    return { cdp, dados: sessao.dados, agora: () => ambiente.agora() };
+  }
+
+  /**
+   * Memória na sessão manual: uma medição leve agora e outra a cada 5 segundos, sem
+   * coleta forçada. Roda fora da fila, como o runner; uma falha só perde a medição.
+   */
+  async function coletarMemoriaManual(sessao: SessaoEmAndamento, cdp: ConexaoCdp): Promise<void> {
+    const medir = async (): Promise<void> => {
+      if (estado.sessao !== sessao || estado.fase !== 'ativa' || tirandoSnapshot || !cdp.anexada) return;
+      try {
+        await medirMemoria(contextoMemoria(sessao, cdp), METRICAS_MEMORIA);
+        if (estado.sessao === sessao) persistir();
+      } catch {
+        // A conexão caiu no meio: o encerramento já está a caminho.
+      }
+    };
+    await medir();
+    pararMedicoes = repetir(() => void medir(), INTERVALO_MEDICAO_MANUAL_MS);
+  }
+
+  /** Censo de objetos a pedido, só na sessão manual com "Memória" marcada. */
+  async function tirarSnapshotManual(): Promise<RespostaComando> {
+    const sessao = estado.sessao;
+    const cdp = conexao;
+    if (estado.fase !== 'ativa' || !sessao) return recusa('sem-sessao');
+    if (sessao.tipo !== 'sessao-manual' || !sessao.selecao.includes('memoria') || !cdp) {
+      return recusa('snapshot', 'O snapshot a pedido só existe na sessão manual com a verificação "Memória" marcada.');
+    }
+    tirandoSnapshot = true;
+    try {
+      await tirarSnapshot(contextoMemoria(sessao, cdp), `manual-${sessao.dados.snapshots.length + 1}`);
+    } catch (erro) {
+      const detalhe = erro instanceof Error ? erro.message : String(erro);
+      return recusa('snapshot', `${MENSAGENS.snapshot} ${detalhe}`);
+    } finally {
+      tirandoSnapshot = false;
+    }
+    if (estado.sessao === sessao) await ambiente.gravarEstado(estado);
+    limitador.imediato();
+    return aceita();
+  }
+
   /** A conexão caiu por fora: para o runner na hora e encerra a análise como interrompida. */
   function conexaoPerdida(sessao: SessaoEmAndamento, motivo: MotivoDesconexao): void {
     if (estado.sessao !== sessao) return;
@@ -241,6 +300,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         relogio,
         sinal: controle.signal,
         ultimaLongTask: () => fimUltimaLongTask,
+        memoria: { dados: sessao.dados },
         aoMudar(_, marca) {
           if (estado.sessao !== sessao) return;
           if (marca) {
@@ -350,8 +410,14 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
       }
       // Em cenário não há injeção direta: a carga da URL inicial traz o script registrado.
       if (plano && cdp) iniciarExecucao(sessao, cdp);
-      else await ambiente.injetar(idAba);
+      else {
+        await ambiente.injetar(idAba);
+        if (cdp && selecao.includes('dom-listeners')) await lerContadoresDom(contextoMemoria(sessao, cdp), 'inicio');
+        if (cdp && selecao.includes('memoria')) await coletarMemoriaManual(sessao, cdp);
+      }
     } catch (erro) {
+      pararMedicoes?.();
+      pararMedicoes = null;
       await cdp?.desanexar();
       conexao = null;
       await ambiente.removerScripts([ID_SCRIPT_SESSAO]).catch(() => 0);
@@ -409,6 +475,13 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     // O debugger sai antes de a interface receber o desfecho. O runner já desanexa
     // ao terminar; aqui cobre a sessão manual e o que tiver sobrado (é idempotente).
     const depurador = sessao.usaDebugger && !sessao.conexaoPerdida ? 1 : 0;
+    const medicoesPeriodicas = pararMedicoes ? 1 : 0;
+    pararMedicoes?.();
+    pararMedicoes = null;
+    // Sessão manual: os contadores de fim são lidos enquanto o debugger ainda está anexado.
+    if (conexao?.anexada && sessao.tipo === 'sessao-manual' && sessao.selecao.includes('dom-listeners')) {
+      await lerContadoresDom(contextoMemoria(sessao, conexao), 'fim').catch(() => undefined);
+    }
     await conexao?.desanexar();
     conexao = null;
     execucao = null;
@@ -437,7 +510,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         { recurso: 'porta', quantidade: portasDaSessao },
         {
           recurso: 'temporizador',
-          quantidade: somar('temporizadores') + encerramento.temporizadores + publicacaoPendente,
+          quantidade: somar('temporizadores') + encerramento.temporizadores + publicacaoPendente + medicoesPeriodicas,
         },
         { recurso: 'depurador', quantidade: depurador },
       ] satisfies ItemLimpeza[]
@@ -545,6 +618,8 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
             return pararSessao('concluida');
           case 'cancelar':
             return pararSessao('cancelada');
+          case 'tirar-snapshot':
+            return tirarSnapshotManual();
         }
       }),
 

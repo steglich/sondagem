@@ -66,4 +66,40 @@ describe('SessaoAtiva', () => {
     expect(montar(null).existe('status-erros-pagina')).toBe(false);
     expect(montar(null, 3).texto('status-erros-pagina')).toBe('3');
   });
+
+  describe('memória na sessão manual', () => {
+    function comMemoria(entradas: { execucao?: VisaoSessao['execucao']; tirando?: boolean } = {}) {
+      const fixture = TestBed.createComponent(SessaoAtiva);
+      fixture.componentRef.setInput('url', URL_TESTE);
+      fixture.componentRef.setInput('status', visaoAtiva({ heapUsado: 3 * 1024 * 1024, snapshots: 2 }).status);
+      fixture.componentRef.setInput('execucao', entradas.execucao ?? null);
+      fixture.componentRef.setInput('podeTirarSnapshot', !entradas.execucao);
+      fixture.componentRef.setInput('tirandoSnapshot', entradas.tirando ?? false);
+      fixture.detectChanges();
+      const raiz = fixture.nativeElement as HTMLElement;
+      return { fixture, botao: () => raiz.querySelector<HTMLButtonElement>('[data-testid="tirar-snapshot"]'), raiz };
+    }
+
+    it('oferece "Tirar snapshot" e mostra o heap e a contagem de snapshots', () => {
+      const { fixture, botao, raiz } = comMemoria();
+      let pedidos = 0;
+      fixture.componentInstance.tirarSnapshot.subscribe(() => pedidos++);
+
+      expect(raiz.querySelector('[data-testid="status-heap"]')?.textContent?.trim()).toBe('3.00 MB');
+      expect(raiz.querySelector('[data-testid="status-snapshots"]')?.textContent?.trim()).toBe('2');
+      botao()!.click();
+      expect(pedidos).toBe(1);
+    });
+
+    it('enquanto o snapshot é tirado, o botão fica desabilitado', () => {
+      const { botao } = comMemoria({ tirando: true });
+      expect(botao()!.disabled).toBe(true);
+      expect(botao()!.textContent).toContain('Tirando snapshot');
+    });
+
+    it('sem "Memória" e em cenário, o botão não existe', () => {
+      expect(montar(null).existe('tirar-snapshot')).toBe(false);
+      expect(comMemoria({ execucao: execucao('executando', 2) }).botao()).toBeNull();
+    });
+  });
 });

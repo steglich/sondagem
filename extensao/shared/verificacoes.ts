@@ -2,7 +2,7 @@ import type { Coletor, IdVerificacao, Selecao, Verificacao } from './types.ts';
 
 /**
  * Registro central de verificações. As fases seguintes acrescentam entradas aqui
- * (memória, CPU), e a tela de confirmação lista o que estiver registrado.
+ * (CPU), e a tela de confirmação lista o que estiver registrado.
  */
 export const VERIFICACOES: readonly Verificacao[] = [
   {
@@ -25,6 +25,20 @@ export const VERIFICACOES: readonly Verificacao[] = [
     descricao: 'Exceções JavaScript e promises rejeitadas (usa o debugger)',
     exige: 'debugger',
     // Coletada pelo service worker via CDP: nada é instalado na página.
+    coleta: [],
+  },
+  {
+    id: 'memoria',
+    nome: 'Memória',
+    descricao: 'Heap por iteração e snapshots de início e fim, com coleta de lixo forçada (usa o debugger)',
+    exige: 'debugger',
+    coleta: [],
+  },
+  {
+    id: 'dom-listeners',
+    nome: 'DOM e listeners',
+    descricao: 'Nós DOM desanexados e listeners acumulados (usa o debugger)',
+    exige: 'debugger',
     coleta: [],
   },
 ];

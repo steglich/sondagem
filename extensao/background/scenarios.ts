@@ -22,11 +22,29 @@ import {
   resolverVezes,
 } from '../shared/cenario.ts';
 import { ESTADOS_FINAIS, transitar } from '../shared/execucao-estado.ts';
-import type { Ambiente, AndamentoExecucao, ErroDePasso, EstadoExecucao, Marca, RegistroIteracao } from '../shared/types.ts';
+import type {
+  Ambiente,
+  AndamentoExecucao,
+  DadosColetados,
+  ErroDePasso,
+  EstadoExecucao,
+  Marca,
+  RegistroIteracao,
+} from '../shared/types.ts';
 import { ConexaoPerdida, type ConexaoCdp } from './cdp.ts';
+import {
+  type ContextoMemoria,
+  forcarColeta,
+  lerContadoresDom,
+  medirMemoria,
+  tirarSnapshot,
+} from './memoria.ts';
 
 /** Intervalo das sondagens (`esperar` por seletor, localização de elemento, inatividade). */
 export const INTERVALO_SONDAGEM_MS = 50;
+
+/** Tempo limite do passo `snapshot` sem `tempo_limite_ms`: contar um heap grande leva bem mais que os outros passos. */
+export const TEMPO_LIMITE_SNAPSHOT_MS = 120_000;
 
 /** Motivos usados em `AbortController.abort()` para parar o runner. */
 export const MOTIVO_CANCELAMENTO = 'cancelada';
@@ -70,6 +88,8 @@ export interface AmbienteRunner {
   sinal: AbortSignal;
   /** Fim, em ms desde a época, da última long task reportada pela página; `null` se nenhuma. */
   ultimaLongTask: () => number | null;
+  /** Onde os passos de memória guardam o que medem. */
+  memoria: { dados: DadosColetados; limiteConstrutores?: number };
   /**
    * O andamento mudou. Com `marca`, é o início ou o fim de uma iteração (ou do
    * aquecimento), que o service worker repassa à página e usa para carimbar os registros.
@@ -306,12 +326,55 @@ export async function executarCenario(
     }
   }
 
-  /**
-   * Passos de medição. Nesta fase nenhum chega aqui: a verificação de memória ainda
-   * não existe e `passoAtivo` os deixa de fora. A fase 3 implementa cada um.
-   */
-  async function executarMedicao(passo: PassoDeMedicao): Promise<void> {
-    throw new FalhaDePasso(`O passo "${passo.tipo}" ainda não é executado por esta versão.`);
+  /** Comandos pelo `enviar` daqui, para que o cancelamento solte também os passos de memória. */
+  const memoria: ContextoMemoria = {
+    cdp: { enviar },
+    dados: ambiente.memoria.dados,
+    agora: () => relogio.agora(),
+    limiteConstrutores: ambiente.memoria.limiteConstrutores,
+  };
+
+  /** Espera a operação por sondagem, para que o prazo e o cancelamento sejam vistos. */
+  async function comPrazo<T>(operacao: Promise<T>, prazo: { limite: number; ms: number }, oQue: string): Promise<T> {
+    let pendente = true;
+    const assentada = operacao.then(
+      (valor) => ({ valor }),
+      (erro: unknown) => ({ erro }),
+    );
+    void assentada.then(() => (pendente = false));
+    while (pendente) {
+      if (relogio.agora() >= prazo.limite) throw new FalhaDePasso(`Tempo limite de ${prazo.ms} ms: ${oQue}.`);
+      await pausar(INTERVALO_SONDAGEM_MS);
+    }
+    const desfecho = await assentada;
+    if ('erro' in desfecho) throw desfecho.erro;
+    return desfecho.valor;
+  }
+
+  /** Passos de medição. Só chegam aqui com a verificação "Memória" marcada (ver `passoAtivo`). */
+  async function executarMedicao(passo: PassoDeMedicao, contexto: Contexto): Promise<void> {
+    const iteracao = contexto.iteracao?.numero ?? null;
+    switch (passo.tipo) {
+      case 'forcar_gc':
+        return forcarColeta(memoria);
+      case 'medir':
+        await medirMemoria(memoria, passo.metricas, iteracao);
+        return;
+      case 'snapshot': {
+        const ms = passo.tempo_limite_ms ?? TEMPO_LIMITE_SNAPSHOT_MS;
+        await comPrazo(tirarSnapshot(memoria, passo.rotulo, iteracao), { limite: relogio.agora() + ms, ms }, 'a contagem de objetos não terminou');
+      }
+    }
+  }
+
+  /** Contadores de início e de fim para "DOM e listeners". Sem eles o resultado ainda vale. */
+  async function contarDom(momento: 'inicio' | 'fim'): Promise<void> {
+    if (!plano.verificacoesAtivas.includes('dom-listeners')) return;
+    try {
+      await lerContadoresDom(memoria, momento);
+    } catch (erro) {
+      if (erro instanceof Cancelado || erro instanceof ConexaoPerdida) throw erro;
+    }
   }
 
   /** Executa um passo aplicando `em_erro`. Devolve sem lançar se o passo foi pulado. */
@@ -321,7 +384,7 @@ export async function executarCenario(
     for (let tentativa = 1; ; tentativa++) {
       conferirCancelamento();
       try {
-        if (passo.tipo === 'medir' || passo.tipo === 'snapshot' || passo.tipo === 'forcar_gc') await executarMedicao(passo);
+        if (passo.tipo === 'medir' || passo.tipo === 'snapshot' || passo.tipo === 'forcar_gc') await executarMedicao(passo, contexto);
         else await executarAcao(passo);
         andamento.passosExecutados++;
         if (contexto.iteracao) contexto.iteracao.passosExecutados++;
@@ -463,9 +526,11 @@ export async function executarCenario(
       ambiente.aoMudar(andamento, { fase: 'fim', iteracao: 'aquecimento' });
     }
 
+    await contarDom('inicio');
     ir('executando');
     await executarLista(cenario.passos, '/passos', { iteracao: null, aquecimento: false });
     ir('coletando');
+    await contarDom('fim');
     ir('concluida');
   } catch (erro) {
     if (andamento.aquecimento && andamento.aquecimento.fim === null) andamento.aquecimento.fim = relogio.agora();

@@ -1,4 +1,5 @@
 import type { Cenario } from '../../../../shared/cenario';
+import { dadosVazios } from '../../../../shared/agregacao';
 import type {
   ComandoInterface,
   ContextoSelecao,
@@ -29,7 +30,7 @@ export function visaoAtiva(status: Partial<StatusResumido> = {}): VisaoSessao {
     alvo: { idAba: 5, url: URL_TESTE },
     selecao: ['processamento', 'carregamento'],
     inicio: 1000,
-    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, errosPagina: 0, ...status },
+    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0, ...status },
     execucao: null,
     resultado: null,
   };
@@ -43,6 +44,7 @@ export const RESULTADO_FIXO: ResultadoSessao = {
   inicio: 1000,
   fim: 13_500,
   dados: {
+    ...dadosVazios(),
     longTasks: [
       { inicio: 3000, duracao: 312.4 },
       { inicio: 6500, duracao: 75 },
@@ -70,6 +72,7 @@ export const RESULTADO_FIXO: ResultadoSessao = {
   paginaRespondeu: true,
   conexaoPerdida: null,
   cenario: null,
+  memoria: null,
 };
 
 export const CENARIO_TESTE: Cenario = {
@@ -98,6 +101,7 @@ export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
   inicio: 1000,
   fim: 31_000,
   dados: {
+    ...dadosVazios(),
     longTasks: [{ inicio: 3000, duracao: 120, iteracao: 1 }],
     interacoes: [],
     documentos: [],
@@ -129,6 +133,77 @@ export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
       { id: 'pior-interacao', amostras: 0, mediana: null, p75: null, p95: null },
     ],
   },
+  memoria: null,
+};
+
+const KB = 1024;
+
+/**
+ * Cenário de vazamento de DOM com "Memória" e "DOM e listeners": 6 iterações, heap
+ * subindo 60 KB por iteração, censos de início e fim e 22 construtores na comparação.
+ */
+export const RESULTADO_MEMORIA_FIXO: ResultadoSessao = {
+  ...RESULTADO_CENARIO_FIXO,
+  selecao: ['memoria', 'dom-listeners'],
+  dados: {
+    ...dadosVazios(),
+    medicoes: Array.from({ length: 6 }, (_, i) => ({
+      instante: 2000 + i * 1000,
+      heapUsado: 2000 * KB + i * 60 * KB,
+      nosDom: 850 + i * 404,
+      listeners: 15,
+      iteracao: i + 1,
+    })),
+    snapshots: [
+      { rotulo: 'inicio', instante: 1500, iteracao: null, totalObjetos: 1434, construtores: [], outros: null },
+      { rotulo: 'fim', instante: 9000, iteracao: null, totalObjetos: 2652, construtores: [], outros: null },
+    ],
+    contadoresDom: { inicio: { nosDom: 850, listeners: 15, nosDesanexados: 203 }, fim: { nosDom: 3274, listeners: 15, nosDesanexados: 1421 } },
+  },
+  memoria: {
+    classificacao: 'vazamento-provavel',
+    series: [
+      {
+        metrica: 'heap_usado',
+        pontos: Array.from({ length: 6 }, (_, i) => ({ iteracao: i + 1, valor: 2000 * KB + i * 60 * KB })),
+        crescimentoMedio: 60 * KB,
+        transicoesCrescentes: 5,
+        classificacao: 'vazamento-provavel',
+      },
+      {
+        metrica: 'nos_dom',
+        pontos: Array.from({ length: 6 }, (_, i) => ({ iteracao: i + 1, valor: 850 + i * 404 })),
+        crescimentoMedio: 404,
+        transicoesCrescentes: 5,
+        classificacao: 'vazamento-provavel',
+      },
+      {
+        metrica: 'listeners',
+        pontos: Array.from({ length: 6 }, (_, i) => ({ iteracao: i + 1, valor: 15 })),
+        crescimentoMedio: 0,
+        transicoesCrescentes: 0,
+        classificacao: 'sem-indicio',
+      },
+    ],
+    comparacao: {
+      de: 'inicio',
+      para: 'fim',
+      construtores: [
+        { nome: 'HTMLLIElement', situacao: 'ambos', contagem: { antes: 200, depois: 1400, variacao: 1200 } },
+        // 20 construtores que cresceram cada vez menos, um novo entre eles, e um que diminuiu.
+        ...Array.from({ length: 20 }, (_, i) => ({
+          nome: `Classe${i + 1}`,
+          situacao: i === 0 ? ('novo' as const) : ('ambos' as const),
+          contagem: { antes: i === 0 ? 0 : 10, depois: 30 - i, variacao: i === 0 ? 30 : 20 - i },
+        })),
+        { nome: 'Temporario', situacao: 'removido', contagem: { antes: 5, depois: 0, variacao: -5 } },
+      ],
+    },
+    domListeners: {
+      nosDesanexados: { antes: 203, depois: 1421, variacao: 1218 },
+      listeners: { antes: 15, depois: 15, variacao: 0 },
+    },
+  },
 };
 
 /** Ponte em memória: faz o papel do service worker e do `chrome.storage.local`. */
@@ -155,6 +230,9 @@ export class PonteSimulada extends PonteExtensao {
           ? { nome: (comando.cenario.definicao as Cenario).nome, estado: 'preparando', iteracao: 0, totalIteracoes: comando.cenario.iteracoes ?? 5 }
           : null,
       };
+    } else if (comando.tipo === 'tirar-snapshot') {
+      const status = this.visao.status;
+      if (status) this.visao = { ...this.visao, status: { ...status, snapshots: status.snapshots + 1 } };
     } else if (comando.tipo === 'parar' || comando.tipo === 'cancelar') {
       const desfecho = comando.tipo === 'parar' ? 'concluida' : 'cancelada';
       this.visao = { ...VISAO_OCIOSA, resultado: { ...RESULTADO_FIXO, desfecho } };

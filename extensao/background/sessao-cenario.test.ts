@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { dadosVazios } from '../shared/agregacao.ts';
 import type { Cenario } from '../shared/cenario.ts';
 import type { EstadoExecucao, EstadoSessao, MensagemDaPagina, MensagemParaPagina, PedidoCenario, VisaoSessao } from '../shared/types.ts';
-import { ABA, ABRIR, FECHAR, criarPagina, criarRelogioSimulado, criarTransporteFalso } from './apoio-teste.ts';
+import { ABA, ABRIR, DE_MEMORIA, FECHAR, criarPagina, criarRelogioSimulado, criarTransporteFalso, ehColeta } from './apoio-teste.ts';
 import { criarConexaoCdp } from './cdp.ts';
 import { type AmbienteSessao, DEPENDENTE_CENARIO, type PortaDaPagina, criarOrquestrador } from './sessao.ts';
 
@@ -29,6 +30,8 @@ const CENARIO: Cenario = {
 
 function montar(gravado?: EstadoSessao) {
   const transporte = criarTransporteFalso();
+  /** Ações periódicas ativas (a medição da sessão manual); o teste dispara à mão. */
+  const periodicas = new Set<() => void>();
   const pagina = criarPagina(transporte);
   const relogio = criarRelogioSimulado();
   const abas = new Map<number, string>([[ABA, 'http://localhost:4300/']]);
@@ -51,6 +54,10 @@ function montar(gravado?: EstadoSessao) {
     agora: () => relogio.agora(),
     criarCdp: () => criarConexaoCdp(transporte),
     soltarDepurador: async (idAba) => transporte.anexadas.delete(idAba),
+    repetir: (acao) => {
+      periodicas.add(acao);
+      return () => void periodicas.delete(acao);
+    },
     relogio,
   };
   const orquestrador = criarOrquestrador(ambiente);
@@ -108,6 +115,7 @@ function montar(gravado?: EstadoSessao) {
     publicadas,
     gravacoes,
     injetadas,
+    periodicas,
     conectarPorta,
     iniciar,
     ateTerminar,
@@ -288,7 +296,7 @@ describe('execução de cenário pelo orquestrador', () => {
     await cancelamento;
 
     expect(resultado).toMatchObject({ desfecho: 'cancelada', cenario: { estadoFinal: 'cancelada', estatisticas: [] } });
-    expect(resultado!.dados).toEqual({ longTasks: [], interacoes: [], documentos: [], errosPagina: [] });
+    expect(resultado!.dados).toEqual(dadosVazios());
     expect(resultado!.cenario!.iteracoes.map((i) => i.completa)).toEqual([true, true, false]);
     // Nenhum comando de ação depois do cancelamento.
     const depois = m.transporte.comandos.slice(comandosAoCancelar).map((c) => c.metodo);
@@ -488,5 +496,150 @@ describe('erros da página', () => {
     expect(resposta.visao.resultado!.dados.errosPagina[0]).not.toHaveProperty('iteracao');
     expect(m.transporte.anexadas.size).toBe(0);
     expect(resposta.visao.resultado!.limpeza).toContainEqual({ recurso: 'depurador', quantidade: 1 });
+  });
+});
+
+describe('memória', () => {
+  const COM_MEMORIA: Cenario = {
+    ...CENARIO,
+    passos: [
+      { tipo: 'forcar_gc' },
+      { tipo: 'snapshot', rotulo: 'inicio' },
+      {
+        tipo: 'repetir',
+        vezes: 'iteracoes',
+        passos: [
+          { tipo: 'clicar', seletor: ABRIR },
+          { tipo: 'clicar', seletor: FECHAR },
+          { tipo: 'forcar_gc' },
+          { tipo: 'medir', metricas: ['heap_usado', 'nos_dom', 'listeners'] },
+        ],
+      },
+      { tipo: 'snapshot', rotulo: 'fim' },
+    ],
+  };
+  class Vazado {}
+
+  it('em cenário: medições por iteração, censos resumidos e classificação no resultado', async () => {
+    const m = montar();
+    // Cada ciclo (um clique em "abrir") deixa 100 KB, um listener, 5 objetos e 2 nós soltos para trás.
+    m.pagina.aoComando = (metodo, parametros) => {
+      if (metodo !== 'Input.dispatchMouseEvent' || parametros['type'] !== 'mousePressed' || parametros['x'] !== 100) return;
+      m.pagina.memoria.heap += 100 * 1024;
+      m.pagina.memoria.listeners++;
+      m.pagina.memoria.desanexados += 2;
+      for (let i = 0; i < 5; i++) m.pagina.objetos.push(new Vazado());
+    };
+    await m.iniciar({ definicao: COM_MEMORIA, iteracoes: 6 }, ['processamento', 'memoria', 'dom-listeners']);
+    const { resultado } = await m.ateTerminar();
+
+    expect(resultado!.desfecho).toBe('concluida');
+    expect(resultado!.dados.medicoes.map((x) => x.iteracao)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(resultado!.dados.snapshots.map((s) => s.rotulo)).toEqual(['inicio', 'fim']);
+    expect(resultado!.memoria).toMatchObject({
+      classificacao: 'vazamento-provavel',
+      comparacao: { de: 'inicio', para: 'fim' },
+      // O ciclo do aquecimento aconteceu antes da leitura inicial.
+      domListeners: { nosDesanexados: { antes: 2, depois: 14, variacao: 12 }, listeners: { antes: 11, depois: 17, variacao: 6 } },
+    });
+    expect(resultado!.memoria!.comparacao!.construtores[0]).toEqual({
+      nome: 'Vazado',
+      situacao: 'ambos',
+      contagem: { antes: 5, depois: 35, variacao: 30 },
+    });
+    const heap = resultado!.memoria!.series.find((s) => s.metrica === 'heap_usado')!;
+    expect(heap).toMatchObject({ crescimentoMedio: 100 * 1024, transicoesCrescentes: 5, classificacao: 'vazamento-provavel' });
+    expect(heap.pontos).toHaveLength(6);
+    // Só o resumo fica gravado: nenhum identificador de objeto da página.
+    expect(JSON.stringify(m.gravado())).not.toContain('objectId');
+  });
+
+  it('em cenário sem "Memória": os passos de memória são ignorados e o resultado não tem análise', async () => {
+    const m = montar();
+    await m.iniciar({ definicao: COM_MEMORIA, iteracoes: 5 }, ['carregamento']);
+    const { resultado } = await m.ateTerminar();
+
+    expect(resultado!.desfecho).toBe('concluida');
+    expect(resultado!.cenario!.iteracoesCompletas).toBe(5);
+    expect(resultado!.dados.medicoes).toEqual([]);
+    expect(resultado!.dados.snapshots).toEqual([]);
+    expect(resultado!.memoria).toBeNull();
+    expect(m.transporte.comandos.some((c) => DE_MEMORIA.test(c.metodo))).toBe(false);
+  });
+
+  it('menos de 5 iterações completas: dados insuficientes', async () => {
+    const m = montar();
+    await m.iniciar({ definicao: COM_MEMORIA, iteracoes: 3 }, ['memoria']);
+    const { resultado } = await m.ateTerminar();
+    expect(resultado!.memoria).toMatchObject({ classificacao: 'dados-insuficientes', domListeners: null });
+  });
+
+  it('sessão manual com "Memória": mede ao iniciar e a cada intervalo, sem coleta forçada nem classificação', async () => {
+    const m = montar();
+    const resposta = await m.iniciar(null, ['processamento', 'memoria']);
+    m.conectarPorta();
+    expect(resposta.ok).toBe(true);
+    expect([...m.transporte.anexadas]).toEqual([ABA]);
+    expect(m.periodicas.size).toBe(1);
+
+    m.pagina.memoria.heap += 5000;
+    m.periodicas.forEach((acao) => acao());
+    await new Promise<void>((resolver) => setImmediate(resolver));
+    const visao = (await m.orquestrador.comando({ tipo: 'obter-visao' })).visao;
+    expect(visao.status).toMatchObject({ heapUsado: 1_005_000, snapshots: 0 });
+
+    const final = await m.orquestrador.comando({ tipo: 'parar' });
+    const resultado = final.visao.resultado!;
+    expect(resultado.dados.medicoes.map((x) => x.heapUsado)).toEqual([1_000_000, 1_005_000]);
+    expect(resultado.dados.medicoes[0]).not.toHaveProperty('iteracao');
+    expect(resultado.memoria).toEqual({ classificacao: null, series: [], comparacao: null, domListeners: null });
+    expect(m.transporte.comandos.some((c) => ehColeta(c.metodo, c.parametros))).toBe(false);
+    // A medição periódica parou e aparece na limpeza, junto com o debugger.
+    expect(m.periodicas.size).toBe(0);
+    expect(resultado.limpeza).toContainEqual({ recurso: 'depurador', quantidade: 1 });
+    expect(resultado.limpeza.find((item) => item.recurso === 'temporizador')!.quantidade).toBeGreaterThanOrEqual(2);
+  });
+
+  it('sessão manual: "tirar-snapshot" acrescenta um resumo a cada pedido', async () => {
+    const m = montar();
+    await m.iniciar(null, ['memoria', 'dom-listeners']);
+    m.conectarPorta();
+
+    const primeiro = await m.orquestrador.comando({ tipo: 'tirar-snapshot' });
+    expect(primeiro).toMatchObject({ ok: true, visao: { fase: 'ativa', status: { snapshots: 1 } } });
+    m.pagina.memoria.listeners += 4;
+    m.pagina.memoria.desanexados += 7;
+    m.pagina.objetos.push(new Vazado(), new Vazado());
+    await m.orquestrador.comando({ tipo: 'tirar-snapshot' });
+
+    const resultado = (await m.orquestrador.comando({ tipo: 'parar' })).visao.resultado!;
+    expect(resultado.dados.snapshots.map((s) => s.rotulo)).toEqual(['manual-1', 'manual-2']);
+    expect(resultado.dados.snapshots[0]).not.toHaveProperty('iteracao');
+    expect(resultado.memoria).toMatchObject({
+      classificacao: null,
+      series: [],
+      comparacao: { de: 'manual-1', para: 'manual-2' },
+      domListeners: { listeners: { antes: 10, depois: 14, variacao: 4 }, nosDesanexados: { antes: 0, depois: 7, variacao: 7 } },
+    });
+    expect(resultado.memoria!.comparacao!.construtores[0]).toEqual({ nome: 'Vazado', situacao: 'novo', contagem: { antes: 0, depois: 2, variacao: 2 } });
+  });
+
+  it('"tirar-snapshot" é recusado fora da sessão manual com "Memória"', async () => {
+    const m = montar();
+    expect(await m.orquestrador.comando({ tipo: 'tirar-snapshot' })).toMatchObject({ ok: false, motivo: 'sem-sessao' });
+
+    await m.iniciar(null, ['processamento']);
+    expect(await m.orquestrador.comando({ tipo: 'tirar-snapshot' })).toMatchObject({ ok: false, motivo: 'snapshot' });
+    expect(m.transporte.comandos.some((c) => DE_MEMORIA.test(c.metodo))).toBe(false);
+  });
+
+  it('snapshot que falha na sessão manual: a sessão continua, e a resposta diz o motivo', async () => {
+    const m = montar();
+    await m.iniciar(null, ['memoria']);
+    m.pagina.erroNoCenso = 'Error: a página quebrou';
+    const resposta = await m.orquestrador.comando({ tipo: 'tirar-snapshot' });
+    expect(resposta).toMatchObject({ ok: false, motivo: 'snapshot', visao: { fase: 'ativa' } });
+    expect(!resposta.ok && resposta.mensagem).toBe('Não foi possível tirar o snapshot. A página recusou a contagem de objetos: Error: a página quebrou');
+    expect(m.transporte.comandos.at(-1)!.metodo).toBe('Runtime.releaseObjectGroup');
   });
 });

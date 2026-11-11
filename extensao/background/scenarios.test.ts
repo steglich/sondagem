@@ -2,19 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { type Marcacao, aplicarLote, dadosVazios, estatisticasDaExecucao } from '../shared/agregacao.ts';
 import type { Cenario, Passo, PassoDeAcao } from '../shared/cenario.ts';
 import { andamentoInicial } from '../shared/execucao-estado.ts';
-import type { AndamentoExecucao, EstadoExecucao, Marca } from '../shared/types.ts';
+import type { AndamentoExecucao, DadosColetados, EstadoExecucao, Marca } from '../shared/types.ts';
 import {
   ABA,
   ABRIR,
+  DE_MEMORIA,
   FECHAR,
   type RelogioSimulado,
   type TransporteFalso,
   criarPagina,
+  ehColeta,
   criarRelogioSimulado,
   criarTransporteFalso,
 } from './apoio-teste.ts';
 import { criarConexaoCdp } from './cdp.ts';
-import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, contarIteracoes, executarCenario } from './scenarios.ts';
+import { GRUPO_CENSO, GRUPO_COLETA } from './memoria.ts';
+import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, TEMPO_LIMITE_SNAPSHOT_MS, contarIteracoes, executarCenario } from './scenarios.ts';
 
 
 function cenario(passos: Passo[], extras: Partial<Cenario> = {}): Cenario {
@@ -34,6 +37,8 @@ interface Montagem {
   estados: EstadoExecucao[];
   marcas: (Marca & { instante: number })[];
   longTask: { fim: number | null };
+  dados: DadosColetados;
+  limiteConstrutores: number | undefined;
   rodar(c: Cenario, opcoes?: { iteracoes?: number; verificacoesAtivas?: string[] }): Promise<AndamentoExecucao>;
   /** Comandos enviados, sem os de preparação. */
   metodos(): string[];
@@ -55,6 +60,8 @@ async function montar(): Promise<Montagem> {
     estados: [],
     marcas: [],
     longTask: { fim: null },
+    dados: dadosVazios(),
+    limiteConstrutores: undefined,
     rodar(c, opcoes = {}) {
       const iteracoes = opcoes.iteracoes ?? 3;
       return executarCenario(
@@ -64,6 +71,7 @@ async function montar(): Promise<Montagem> {
           relogio,
           sinal: controle.signal,
           ultimaLongTask: () => m.longTask.fim,
+          memoria: { dados: m.dados, limiteConstrutores: m.limiteConstrutores },
           aoMudar(andamento, marca) {
             if (m.estados.at(-1) !== andamento.estado) m.estados.push(andamento.estado);
             if (marca) m.marcas.push({ ...marca, instante: relogio.agora() });
@@ -645,20 +653,29 @@ describe('cancelamento e limpeza', () => {
 });
 
 describe('passos de medição', () => {
+  const MEDIR: Passo = { tipo: 'medir', metricas: ['heap_usado', 'nos_dom', 'listeners'] };
   const comMedicao = cenario([
     { tipo: 'forcar_gc' },
     { tipo: 'forcar_gc' },
     { tipo: 'snapshot', rotulo: 'inicio' },
-    {
-      tipo: 'repetir',
-      vezes: 'iteracoes',
-      passos: [...CICLO, { tipo: 'forcar_gc' }, { tipo: 'medir', metricas: ['heap_usado', 'nos_dom', 'listeners'] }],
-    },
+    { tipo: 'repetir', vezes: 'iteracoes', passos: [...CICLO, { tipo: 'forcar_gc' }, MEDIR] },
     { tipo: 'snapshot', rotulo: 'fim' },
   ]);
   const semMedicao = cenario([{ tipo: 'repetir', vezes: 'iteracoes', passos: CICLO }]);
+  const MEMORIA = ['processamento', 'memoria'];
+  /** Comandos que só a medição de memória envia, com o grupo de objetos quando há. */
+  const deMemoria = (m: Montagem): string[] =>
+    m.transporte.comandos
+      .filter((c) => DE_MEMORIA.test(c.metodo) || (c.parametros as { expression?: string } | undefined)?.expression === 'Object.prototype')
+      .map((c) => {
+        const grupo = (c.parametros as { objectGroup?: string } | undefined)?.objectGroup;
+        return grupo ? `${c.metodo} ${grupo}` : c.metodo;
+      });
+  const COLETA = [`Runtime.evaluate ${GRUPO_COLETA}`, `Runtime.queryObjects ${GRUPO_COLETA}`, `Runtime.releaseObjectGroup ${GRUPO_COLETA}`];
+  const MEDICAO = ['Performance.enable', 'Performance.getMetrics'];
+  const CENSO = [`Runtime.evaluate ${GRUPO_CENSO}`, `Runtime.queryObjects ${GRUPO_CENSO}`, 'Runtime.callFunctionOn', `Runtime.releaseObjectGroup ${GRUPO_CENSO}`];
 
-  it('medir, snapshot e forcar_gc não geram comandos de CDP nesta fase', async () => {
+  it('sem "Memória" nem "DOM e listeners", os passos de memória não geram nenhum comando de CDP', async () => {
     const com = await montar();
     const andamentoCom = await com.rodar(comMedicao, { verificacoesAtivas: ['processamento', 'carregamento', 'erros-pagina'] });
     const sem = await montar();
@@ -666,11 +683,214 @@ describe('passos de medição', () => {
 
     expect(andamentoCom.estado).toBe('concluida');
     expect(com.transporte.comandos).toEqual(sem.transporte.comandos);
-    const dominios = new Set(com.metodos().map((metodo) => metodo.split('.')[0]));
-    expect([...dominios].sort()).toEqual(['Browser', 'Input', 'Network', 'Page', 'Runtime']);
-    expect(com.metodos().some((metodo) => /HeapProfiler|Memory|DOM\./.test(metodo))).toBe(false);
+    expect(deMemoria(com)).toEqual([]);
+    // Nada dos domínios que o chrome.debugger nem oferece a extensões.
+    expect(com.metodos().some((metodo) => /HeapProfiler|Memory\.|getHeapUsage/.test(metodo))).toBe(false);
     // Os passos de ação rodam todos, e os de medição não contam como executados.
     expect(andamentoCom.passosExecutados).toBe(andamentoSem.passosExecutados);
     expect(andamentoCom.iteracoes).toHaveLength(3);
+    expect(com.dados).toEqual(dadosVazios());
+  });
+
+  it('com "Memória", nenhum comando sai dos domínios que o chrome.debugger recusa a extensões', async () => {
+    const m = await montar();
+    await m.rodar(comMedicao, { verificacoesAtivas: ['memoria', 'dom-listeners'] });
+    expect(deMemoria(m).length).toBeGreaterThan(0);
+    expect(m.metodos().some((metodo) => /HeapProfiler|Memory\.|Profiler\.|getHeapUsage/.test(metodo))).toBe(false);
+  });
+
+  it('forcar_gc: uma coleta por passo, o grupo de objetos é liberado, e o passo seguinte só começa depois da resposta', async () => {
+    const m = await montar();
+    const ordem: string[] = [];
+    const original = m.transporte.enviar;
+    m.transporte.enviar = async (idAba, metodo, parametros) => {
+      const resposta = await original(idAba, metodo, parametros);
+      if (ehColeta(metodo, parametros)) {
+        // A coleta demora: se o runner não esperasse, a medição sairia antes deste registro.
+        await m.relogio.esperar(300);
+        ordem.push('coleta concluída');
+      } else if (metodo === 'Performance.getMetrics') ordem.push('medição');
+      return resposta;
+    };
+    const andamento = await m.rodar(cenario([{ tipo: 'forcar_gc' }, { tipo: 'forcar_gc' }, MEDIR]), { verificacoesAtivas: MEMORIA });
+
+    expect(andamento.estado).toBe('concluida');
+    expect(deMemoria(m)).toEqual([...COLETA, ...COLETA, ...MEDICAO]);
+    expect(ordem).toEqual(['coleta concluída', 'coleta concluída', 'medição']);
+    expect(andamento.passosExecutados).toBe(3);
+  });
+
+  it('medir: uma medição por iteração, com o número da iteração', async () => {
+    const m = await montar();
+    m.pagina.aoComando = (metodo, parametros) => {
+      if (ehColeta(metodo, parametros)) m.pagina.memoria.heap += 1000;
+    };
+    const andamento = await m.rodar(cenario([{ tipo: 'repetir', vezes: 'iteracoes', passos: [...CICLO, { tipo: 'forcar_gc' }, MEDIR] }]), {
+      iteracoes: 10,
+      verificacoesAtivas: MEMORIA,
+    });
+
+    expect(andamento.estado).toBe('concluida');
+    expect(m.dados.medicoes).toHaveLength(10);
+    expect(m.dados.medicoes.map((x) => x.iteracao)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(m.dados.medicoes[0]).toMatchObject({ heapUsado: 1_001_000, nosDom: 50, listeners: 10 });
+    expect(m.dados.medicoes[9]!.heapUsado).toBe(1_010_000);
+    expect(m.dados.snapshots).toEqual([]);
+  });
+
+  it('medir respeita o campo metricas: só registra o que foi pedido', async () => {
+    const soHeap = await montar();
+    await soHeap.rodar(cenario([{ tipo: 'medir', metricas: ['heap_usado'] }]), { verificacoesAtivas: MEMORIA });
+    expect(deMemoria(soHeap)).toEqual(MEDICAO);
+    expect(soHeap.dados.medicoes).toEqual([expect.objectContaining({ heapUsado: 1_000_000, nosDom: null, listeners: null, iteracao: null })]);
+
+    const soListeners = await montar();
+    await soListeners.rodar(cenario([{ tipo: 'medir', metricas: ['listeners'] }]), { verificacoesAtivas: MEMORIA });
+    expect(soListeners.dados.medicoes).toEqual([expect.objectContaining({ heapUsado: null, nosDom: null, listeners: 10 })]);
+  });
+
+  it('snapshot: conta os objetos por construtor, guarda só o resumo com o rótulo e libera a lista de objetos', async () => {
+    const m = await montar();
+    const andamento = await m.rodar(comMedicao, { verificacoesAtivas: MEMORIA });
+
+    expect(andamento.estado).toBe('concluida');
+    expect(m.dados.snapshots.map((s) => [s.rotulo, s.iteracao])).toEqual([
+      ['inicio', null],
+      ['fim', null],
+    ]);
+    expect(m.dados.snapshots[0]).toMatchObject({
+      totalObjetos: 7,
+      construtores: [
+        { nome: 'Item', contagem: 3 },
+        { nome: 'Array', contagem: 1 },
+        { nome: 'Function', contagem: 1 },
+        { nome: 'Object', contagem: 1 },
+        { nome: 'Painel', contagem: 1 },
+      ],
+      outros: null,
+    });
+    expect(deMemoria(m).slice(COLETA.length * 2, COLETA.length * 2 + CENSO.length)).toEqual(CENSO);
+    // A contagem roda na página; de lá só volta a tabela.
+    const chamada = m.transporte.comandos.find((c) => c.metodo === 'Runtime.callFunctionOn')!.parametros as Record<string, unknown>;
+    expect(chamada).toMatchObject({ objectId: 'lista', returnByValue: true, arguments: [{ value: 500 }] });
+    expect(String(chamada['functionDeclaration'])).toMatch(/^function contarPorConstrutor\(/);
+    expect(m.dados.pausasDeMedicao).toHaveLength(2);
+    expect(m.dados.pausasDeMedicao.every((p) => p.fim !== null)).toBe(true);
+  });
+
+  it('snapshot: o resumo é limitado, e o resto é somado em "outros"', async () => {
+    const m = await montar();
+    m.limiteConstrutores = 2;
+    await m.rodar(cenario([{ tipo: 'snapshot', rotulo: 'inicio' }]), { verificacoesAtivas: MEMORIA });
+    expect(m.dados.snapshots[0]).toMatchObject({
+      totalObjetos: 7,
+      construtores: [
+        { nome: 'Item', contagem: 3 },
+        { nome: 'Array', contagem: 1 },
+      ],
+      outros: { nome: '(outros)', contagem: 3 },
+    });
+  });
+
+  it('snapshot que a página recusa: o passo falha com o motivo, segue a política em_erro e libera a lista', async () => {
+    const interrompe = await montar();
+    interrompe.pagina.erroNoCenso = 'TypeError: Map is not a constructor\n    at contarPorConstrutor';
+    const erro = await interrompe.rodar(cenario([{ tipo: 'snapshot', rotulo: 'inicio' }, ...CICLO]), { verificacoesAtivas: MEMORIA });
+    expect(erro.estado).toBe('erro');
+    expect(erro.falhas).toEqual([
+      {
+        caminho: '/passos/0',
+        tipoPasso: 'snapshot',
+        iteracao: null,
+        motivo: 'A página recusou a contagem de objetos: TypeError: Map is not a constructor',
+        acao: 'interrompeu',
+      },
+    ]);
+    expect(interrompe.cliques()).toHaveLength(0);
+    expect(interrompe.dados.snapshots).toEqual([]);
+    expect(deMemoria(interrompe).at(-1)).toBe(`Runtime.releaseObjectGroup ${GRUPO_CENSO}`);
+
+    const pula = await montar();
+    pula.pagina.erroNoCenso = 'Error: falhou';
+    const segue = await pula.rodar(cenario([{ tipo: 'snapshot', rotulo: 'inicio', em_erro: 'pular' }, ...CICLO]), { verificacoesAtivas: MEMORIA });
+    expect(segue.estado).toBe('concluida');
+    expect(segue.falhas).toEqual([expect.objectContaining({ tipoPasso: 'snapshot', acao: 'pulou' })]);
+    expect(pula.cliques()).toHaveLength(2);
+  });
+
+  it('snapshot que não termina: falha no tempo limite do passo', async () => {
+    const m = await montar();
+    m.pagina.censoTravado = true;
+    const andamento = await m.rodar(cenario([{ tipo: 'snapshot', rotulo: 'inicio', tempo_limite_ms: 2000 }]), { verificacoesAtivas: MEMORIA });
+    expect(andamento.estado).toBe('erro');
+    expect(andamento.falhas[0]!.motivo).toBe('Tempo limite de 2000 ms: a contagem de objetos não terminou.');
+    expect(TEMPO_LIMITE_SNAPSHOT_MS).toBeGreaterThan(2000);
+  });
+
+  it('long task durante o snapshot é marcada como causada pela medição e sai das estatísticas', async () => {
+    const m = await montar();
+    let instanteDoSnapshot = 0;
+    m.pagina.aoComando = (metodo) => {
+      if (metodo === 'Runtime.callFunctionOn') instanteDoSnapshot = m.relogio.agora();
+    };
+    const andamento = await m.rodar(
+      cenario([{ tipo: 'repetir', vezes: 'iteracoes', passos: [...CICLO, { tipo: 'snapshot', rotulo: 'meio' }, { tipo: 'esperar', ms: 500 }] }]),
+      { iteracoes: 1, verificacoesAtivas: MEMORIA },
+    );
+    expect(andamento.estado).toBe('concluida');
+
+    // O lote da página chega depois: uma long task que cobre o snapshot e outra da própria página.
+    const inicioDaIteracao = andamento.iteracoes[0]!.inicio;
+    aplicarLote(
+      m.dados,
+      {
+        documento: { id: 'd', url: 'http://localhost:4300/limpa', inicio: 0 },
+        longTasks: [
+          { inicio: inicioDaIteracao + 10, duracao: 60 },
+          { inicio: instanteDoSnapshot - 5, duracao: 900 },
+        ],
+        interacoes: [],
+        metricas: {},
+      },
+      andamento,
+    );
+    expect(m.dados.longTasks.map((t) => t.causadaPelaMedicao ?? false)).toEqual([false, true]);
+    const tempo = estatisticasDaExecucao(m.dados, andamento.iteracoes, ['processamento']).find((e) => e.id === 'tempo-long-tasks');
+    expect(tempo).toMatchObject({ amostras: 1, mediana: 60 });
+  });
+
+  it('"DOM e listeners": coleta o lixo e lê os contadores depois do aquecimento e no fim, mesmo sem "Memória"', async () => {
+    const m = await montar();
+    let cliques = 0;
+    m.pagina.aoComando = (metodo, parametros) => {
+      if (metodo !== 'Input.dispatchMouseEvent' || parametros['type'] !== 'mousePressed' || ++cliques % 2 === 0) return;
+      m.pagina.memoria.listeners++;
+      m.pagina.memoria.desanexados += 3;
+    };
+    const andamento = await m.rodar(cenario([{ tipo: 'forcar_gc' }, { tipo: 'repetir', vezes: 'iteracoes', passos: CICLO }], { aquecimento: CICLO }), {
+      iteracoes: 4,
+      verificacoesAtivas: ['dom-listeners'],
+    });
+    expect(andamento.estado).toBe('concluida');
+    // O ciclo do aquecimento já tinha acontecido na leitura inicial; cada iteração acrescenta 1 listener e 3 nós.
+    expect(m.dados.contadoresDom).toEqual({
+      inicio: { nosDom: 50, listeners: 11, nosDesanexados: 3 },
+      fim: { nosDom: 50, listeners: 15, nosDesanexados: 15 },
+    });
+    const LEITURA = [...COLETA, ...MEDICAO, 'DOM.enable', 'DOM.getDetachedDomNodes', 'DOM.disable'];
+    // Sem "Memória", o passo forcar_gc do cenário não roda: as coletas são só as das duas leituras.
+    expect(deMemoria(m)).toEqual([...LEITURA, ...LEITURA]);
+  });
+
+  it('cancelar durante o snapshot: a execução para sem resumo', async () => {
+    const m = await montar();
+    m.pagina.censoTravado = true;
+    m.relogio.aoAvancar = () => {
+      if (m.metodos().includes('Runtime.callFunctionOn')) m.controle.abort(MOTIVO_CANCELAMENTO);
+    };
+    const andamento = await m.rodar(cenario([{ tipo: 'snapshot', rotulo: 'inicio' }, ...CICLO]), { verificacoesAtivas: MEMORIA });
+    expect(andamento.estado).toBe('cancelada');
+    expect(m.cliques()).toHaveLength(0);
+    expect(m.dados.snapshots).toEqual([]);
   });
 });

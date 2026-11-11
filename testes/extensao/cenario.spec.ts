@@ -1,68 +1,16 @@
-import { readFileSync } from 'node:fs';
-import type { BrowserContext, Page, Worker } from '@playwright/test';
-import type { Cenario } from '../../extensao/shared/cenario.ts';
-import type { EstadoSessao, ResultadoSessao } from '../../extensao/shared/types.ts';
+import {
+  abrirPaginaEPainel,
+  cenarioDaPaginaTeste,
+  depuradorAnexado,
+  estadoGravado,
+  executar,
+  resultadoFinal,
+  salvarCenario,
+  scriptsRegistrados,
+} from './apoio.ts';
 import { CHAVE_IGNORAR_DEPURADOR, coletarErros, expect, test } from './fixtures.ts';
 
-const CHAVE_ESTADO = 'sondagem:sessao';
-const ABRIR_FECHAR = JSON.parse(readFileSync('pagina-teste/cenarios/abrir-fechar.json', 'utf8')) as Cenario;
-
-/** Abre uma página qualquer da página de teste e o painel em aba própria, apontado para ela. */
-async function abrirPaginaEPainel(context: BrowserContext, serviceWorker: Worker, idExtensao: string, caminho = '/') {
-  const pagina = await context.newPage();
-  await pagina.goto(caminho);
-  const idAba = await serviceWorker.evaluate(
-    async (url) => (await chrome.tabs.query({})).find((aba) => aba.url === url)?.id,
-    pagina.url(),
-  );
-  expect(idAba).toBeDefined();
-  const painel = await context.newPage();
-  await painel.goto(`chrome-extension://${idExtensao}/index.html?aba=${idAba}#/painel`);
-  await expect(painel.getByTestId('analisar')).toBeVisible();
-  await pagina.bringToFront();
-  return { pagina, painel, idAba: idAba! };
-}
-
-async function estadoGravado(serviceWorker: Worker): Promise<EstadoSessao | undefined> {
-  const itens = await serviceWorker.evaluate((chave) => chrome.storage.session.get(chave), CHAVE_ESTADO);
-  return itens[CHAVE_ESTADO] as EstadoSessao | undefined;
-}
-
-const scriptsRegistrados = (serviceWorker: Worker): Promise<number> =>
-  serviceWorker.evaluate(async () => (await chrome.scripting.getRegisteredContentScripts()).length);
-
-/** `true` se o debugger da extensão está anexado à aba: só nesse caso um comando é aceito. */
-const depuradorAnexado = (serviceWorker: Worker, idAba: number): Promise<boolean> =>
-  serviceWorker.evaluate(async (tabId) => {
-    try {
-      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', { expression: '1' });
-      return true;
-    } catch {
-      return false;
-    }
-  }, idAba);
-
-/** Cola o cenário na tela de cenários e salva; ele fica selecionado. */
-async function salvarCenario(painel: Page, cenario: Cenario): Promise<void> {
-  await painel.getByTestId('texto-cenario').fill(JSON.stringify(cenario, null, 2));
-  await painel.getByTestId('salvar-cenario').click();
-  await expect(painel.getByTestId(`selecionar-cenario-${cenario.nome}`)).toBeChecked();
-}
-
-/** "Analisar" → confirmação no modo cenário → executar. */
-async function executar(painel: Page, opcoes: { iteracoes?: number; versaoBuild?: string; desmarcar?: string[] } = {}): Promise<void> {
-  await painel.getByTestId('analisar').click();
-  await expect(painel.getByTestId('confirmacao-modo')).toHaveText('Cenário');
-  if (opcoes.iteracoes !== undefined) await painel.getByTestId('confirmacao-iteracoes').fill(String(opcoes.iteracoes));
-  if (opcoes.versaoBuild !== undefined) await painel.getByTestId('confirmacao-versao-build').fill(opcoes.versaoBuild);
-  for (const id of opcoes.desmarcar ?? []) await painel.getByTestId(`verificacao-${id}`).uncheck();
-  await painel.getByTestId('confirmar').click();
-}
-
-async function resultadoFinal(painel: Page, serviceWorker: Worker, desfecho: string): Promise<ResultadoSessao> {
-  await expect(painel.getByTestId('resultado-desfecho')).toHaveText(desfecho, { timeout: 30_000 });
-  return (await estadoGravado(serviceWorker))!.resultado!;
-}
+const ABRIR_FECHAR = cenarioDaPaginaTeste('abrir-fechar');
 
 test('cenário abrir-fechar: 3 execuções com o mesmo número de iterações completas e de passos', async ({
   context,
@@ -94,8 +42,8 @@ test('cenário abrir-fechar: 3 execuções com o mesmo número de iterações co
     expect(await scriptsRegistrados(serviceWorker)).toBe(0);
   }
 
-  // 4 passos de ação por iteração (os de medição não rodam nesta fase) + 2 do aquecimento.
-  expect(execucoes[0]).toEqual({ completas: 5, incompletas: 0, passos: 22, passosPorIteracao: [4, 4, 4, 4, 4] });
+  // Por iteração: 4 passos de ação e 3 de memória. Fora delas: 2 do aquecimento e 3 de memória antes e depois.
+  expect(execucoes[0]).toEqual({ completas: 5, incompletas: 0, passos: 43, passosPorIteracao: [7, 7, 7, 7, 7] });
   expect(execucoes[1]).toEqual(execucoes[0]);
   expect(execucoes[2]).toEqual(execucoes[0]);
 
@@ -116,7 +64,7 @@ test('o resultado registra a configuração efetiva e o ambiente', async ({ cont
   expect(resultado).toMatchObject({
     tipo: 'cenario',
     url: ABRIR_FECHAR.url_inicial,
-    selecao: ['processamento', 'erros-pagina'],
+    selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners'],
     cenario: {
       // O valor da confirmação (2) vale mais do que o do cenário (20).
       configuracao: { nome: 'abrir-fechar', urlInicial: ABRIR_FECHAR.url_inicial, iteracoes: 2, throttling: 'padrao', versaoBuild: '1.4.2' },
@@ -438,7 +386,7 @@ test('com outro depurador na aba, a análise não começa e o painel orienta o u
 
   await expect(painel.getByTestId('falha-debugger-titulo')).toHaveText('Há um depurador aberto nesta aba.');
   await expect(painel.getByTestId('falha-debugger-orientacao')).toContainText('janela de teste dedicada');
-  await expect(painel.getByTestId('falha-debugger-dependente')).toHaveText(['Execução do cenário', 'Erros da página']);
+  await expect(painel.getByTestId('falha-debugger-dependente')).toHaveText(['Execução do cenário', 'Erros da página', 'Memória', 'DOM e listeners']);
   await expect(painel.getByTestId('analisar')).toBeVisible();
 
   // Nada começou: sem navegação, sem cliques, sem script, sem debugger da extensão.

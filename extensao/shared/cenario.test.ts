@@ -6,6 +6,7 @@ import {
   type Passo,
   analisarTextoCenario,
   filtrarPassosDeMedicao,
+  temPassoDe,
   resolverIteracoes,
   resolverVezes,
   validarCenario,
@@ -229,6 +230,18 @@ describe('iterações', () => {
   });
 });
 
+describe('temPassoDe', () => {
+  it('encontra passos de memória no nível principal e dentro de repetir', () => {
+    expect(temPassoDe(exemplo().passos, 'memoria')).toBe(true);
+    expect(temPassoDe([{ tipo: 'repetir', vezes: 2, passos: [{ tipo: 'repetir', vezes: 2, passos: [{ tipo: 'forcar_gc' }] }] }], 'memoria')).toBe(true);
+  });
+
+  it('cenário só com passos de ação não depende de nenhuma verificação', () => {
+    expect(temPassoDe([{ tipo: 'repetir', vezes: 'iteracoes', passos: [{ tipo: 'clicar', seletor: '#a' }] }], 'memoria')).toBe(false);
+    expect(temPassoDe(exemplo().passos, 'processamento')).toBe(false);
+  });
+});
+
 describe('filtrarPassosDeMedicao', () => {
   it('sem a verificação de memória, remove medir, snapshot e forcar_gc e mantém as ações', () => {
     const tipos = (passos: Passo[]): unknown[] =>
@@ -252,9 +265,21 @@ describe('documentação e validador gerado', () => {
     expect(JSON.parse(blocos[0]!)).toEqual(exemplo());
   });
 
-  it('o cenário da página de teste é válido', () => {
-    const texto = readFileSync(new URL('../../pagina-teste/cenarios/abrir-fechar.json', import.meta.url), 'utf8');
-    expect(analisarTextoCenario(texto)).toMatchObject({ ok: true, cenario: { nome: 'abrir-fechar' } });
+  it.each(['abrir-fechar', 'vazamento-listener', 'vazamento-dom', 'limpa-memoria'])('o cenário %s da página de teste é válido', (nome) => {
+    const texto = readFileSync(new URL(`../../pagina-teste/cenarios/${nome}.json`, import.meta.url), 'utf8');
+    expect(analisarTextoCenario(texto)).toMatchObject({ ok: true, cenario: { nome } });
+  });
+
+  it('os cenários de memória medem depois de coleta forçada, em 10 iterações, com snapshots de início e fim', () => {
+    for (const nome of ['vazamento-listener', 'vazamento-dom', 'limpa-memoria']) {
+      const cenario = JSON.parse(readFileSync(new URL(`../../pagina-teste/cenarios/${nome}.json`, import.meta.url), 'utf8')) as Cenario;
+      expect(cenario.execucao?.iteracoes, nome).toBe(10);
+      expect(temPassoDe(cenario.passos, 'memoria'), nome).toBe(true);
+      const tipos = cenario.passos.map((p) => p.tipo);
+      expect(tipos.filter((t) => t === 'snapshot'), nome).toHaveLength(2);
+      const iteracao = cenario.passos.find((p) => p.tipo === 'repetir')!;
+      expect(iteracao.passos.map((p) => p.tipo).slice(-3), nome).toEqual(['forcar_gc', 'forcar_gc', 'medir']);
+    }
   });
 
   it('o validador versionado está em dia com o schema', async () => {

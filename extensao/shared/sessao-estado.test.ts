@@ -97,7 +97,7 @@ describe('visaoDe', () => {
       alvo: { idAba: 5, url: inicio.url },
       selecao: ['processamento'],
       inicio: 1000,
-      status: { longTasks: 1, interacoes: 0, piorLongTask: 300, carregamentos: 1, errosPagina: 0 },
+      status: { longTasks: 1, interacoes: 0, piorLongTask: 300, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0 },
       execucao: null,
       resultado: null,
     });

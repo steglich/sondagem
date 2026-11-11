@@ -226,6 +226,24 @@ describe('Painel', () => {
       expect(existe('analisar')).toBe(true);
     });
 
+    it('sessão manual com "Memória": "Tirar snapshot" envia o comando e a sessão continua', async () => {
+      ponte.visao = { ...visaoAtiva(), selecao: ['processamento', 'memoria'] };
+      await abrir();
+      expect(porId('status-snapshots').textContent).toContain('0');
+
+      await clicar('tirar-snapshot');
+      expect(ponte.comandos.at(-1)).toEqual({ tipo: 'tirar-snapshot' });
+      expect(porId('status-snapshots').textContent).toContain('1');
+      expect(existe('parar')).toBe(true);
+      expect(porId<HTMLButtonElement>('tirar-snapshot').disabled).toBe(false);
+    });
+
+    it('sem "Memória" na seleção, não há "Tirar snapshot"', async () => {
+      ponte.visao = visaoAtiva();
+      await abrir();
+      expect(existe('tirar-snapshot')).toBe(false);
+    });
+
     it('"Cancelar" encerra e indica que a análise foi cancelada', async () => {
       await iniciar();
       await clicar('cancelar');
@@ -283,7 +301,7 @@ describe('Painel', () => {
       expect(ponte.comandos.at(-1)).toEqual({
         tipo: 'iniciar',
         idAba: 5,
-        selecao: ['processamento', 'erros-pagina'],
+        selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners'],
         cenario: { definicao: CENARIO_TESTE, iteracoes: 10, versaoBuild: null },
       });
       expect(porId('execucao-cenario').textContent).toBe('abrir-fechar');
@@ -298,7 +316,7 @@ describe('Painel', () => {
       await clicar('confirmar');
       await clicar('cancelar');
 
-      expect(ponte.selecoes.get('cenario:abrir-fechar')).toEqual(['processamento', 'erros-pagina']);
+      expect(ponte.selecoes.get('cenario:abrir-fechar')).toEqual(['processamento', 'erros-pagina', 'memoria', 'dom-listeners']);
       expect(ponte.selecoes.has('manual')).toBe(false);
 
       await clicar('analisar');

@@ -6,10 +6,10 @@ Detectar vazamentos de memória de forma comprovada é o núcleo do produto (pla
 
 ## What Changes
 
-- Nova verificação "Memória": medição leve por iteração (heap usado, nós DOM, listeners) e snapshots de início e fim com coleta de lixo forçada.
+- Nova verificação "Memória": medição leve por iteração (heap usado, nós DOM, listeners) e censos de objetos no início e no fim, com coleta de lixo forçada.
 - Nova verificação "DOM e listeners": nós desanexados e listeners acumulados.
-- Resumo de heap snapshot por construtor (contagem, tamanho próprio e tamanho retido), sem guardar o snapshot bruto.
-- Comparação entre snapshot inicial e final: construtores que mais cresceram.
+- Censo de objetos vivos por construtor (contagem) a cada passo `snapshot`, sem guardar nada bruto do heap.
+- Comparação entre o censo inicial e o final: construtores que mais cresceram em número de objetos.
 - Tendência de memória por iteração e classificação "vazamento provável".
 - Aviso na confirmação quando a verificação de memória é desmarcada.
 - Na sessão manual, snapshots sob demanda por botão.
@@ -25,8 +25,8 @@ Nenhuma.
 
 ## Impact
 
-- Código: novos módulos de memória em `extensao/background/`, processamento de snapshot em documento offscreen com worker, tipos em `shared/`, telas de resultado de memória no side panel.
-- Manifesto: nova permissão `offscreen`.
-- Uso de CDP: `HeapProfiler`, `Runtime`, `Memory`.
+- Código: novo módulo de memória em `extensao/background/`, análise e tipos em `shared/`, telas de resultado de memória no side panel.
+- Manifesto: sem permissões novas.
+- Uso de CDP: `Runtime` (`queryObjects`, `callFunctionOn`), `Performance` e `DOM`. Os domínios `HeapProfiler` e `Memory` não são oferecidos a extensões pelo `chrome.debugger`, por isso não há heap snapshot nem tamanho por objeto.
 - Critério de aceitação: os casos `/vazamento-listener` e `/vazamento-dom` da página de teste são detectados, e `/limpa` não é.
 - Depende de `fase-2-cenarios` aplicada.

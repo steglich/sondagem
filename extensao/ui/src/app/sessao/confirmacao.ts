@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
-import { type Cenario, descreverThrottling, resolverIteracoes } from '../../../../shared/cenario';
+import { type Cenario, descreverThrottling, resolverIteracoes, temPassoDe } from '../../../../shared/cenario';
 import type { IdVerificacao, Selecao, Verificacao } from '../../../../shared/types';
 
 export type ModoAnalise = 'cenario' | 'manual';
@@ -100,6 +100,13 @@ export interface AnaliseConfirmada {
           </label>
         }
       </fieldset>
+
+      @if (semMemoria()) {
+        <p class="aviso" data-testid="confirmacao-aviso-memoria">
+          Este cenário tem passos de memória (medir, snapshot ou forcar_gc). Sem a verificação “Memória” eles serão
+          ignorados, e um vazamento não será confirmado nem descartado. Os outros passos rodam normalmente.
+        </p>
+      }
 
       @if (!cenarioAtivo() && exigeDebugger()) {
         <p class="nota" data-testid="confirmacao-aviso-debugger">
@@ -205,6 +212,12 @@ export class Confirmacao {
   protected readonly exigeDebugger = computed(() =>
     this.verificacoes().some((v) => v.exige === 'debugger' && this.marcadas().has(v.id)),
   );
+
+  /** Cenário com passos de memória e a verificação "Memória" desmarcada: avisa, sem impedir. */
+  protected readonly semMemoria = computed(() => {
+    const cenario = this.cenarioAtivo();
+    return cenario !== null && temPassoDe(cenario.passos, 'memoria') && !this.marcadas().has('memoria');
+  });
 
   private readonly iteracoesValidas = computed(() => {
     const valor = Number(this.iteracoes());

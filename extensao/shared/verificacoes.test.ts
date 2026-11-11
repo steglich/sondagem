@@ -8,8 +8,8 @@ import {
 } from './verificacoes.ts';
 
 describe('registro de verificações', () => {
-  it('oferece Processamento, Carregamento e Erros da página', () => {
-    expect(VERIFICACOES.map((v) => v.nome)).toEqual(['Processamento', 'Carregamento', 'Erros da página']);
+  it('oferece Processamento, Carregamento, Erros da página, Memória e DOM e listeners', () => {
+    expect(VERIFICACOES.map((v) => v.nome)).toEqual(['Processamento', 'Carregamento', 'Erros da página', 'Memória', 'DOM e listeners']);
   });
 
   it('marca quais verificações exigem o debugger', () => {
@@ -17,14 +17,17 @@ describe('registro de verificações', () => {
       processamento: 'pagina',
       carregamento: 'pagina',
       'erros-pagina': 'debugger',
+      memoria: 'debugger',
+      'dom-listeners': 'debugger',
     });
+    expect(verificacoesComDebugger(['memoria', 'dom-listeners']).map((v) => v.nome)).toEqual(['Memória', 'DOM e listeners']);
     expect(verificacoesComDebugger(['carregamento', 'erros-pagina']).map((v) => v.nome)).toEqual(['Erros da página']);
     expect(verificacoesComDebugger(['carregamento', 'processamento'])).toEqual([]);
   });
 
   it('a seleção padrão da sessão manual deixa de fora o que exige o debugger; a de cenário marca tudo', () => {
     expect(selecaoPadrao()).toEqual(['processamento', 'carregamento']);
-    expect(selecaoPadrao(true)).toEqual(['processamento', 'carregamento', 'erros-pagina']);
+    expect(selecaoPadrao(true)).toEqual(['processamento', 'carregamento', 'erros-pagina', 'memoria', 'dom-listeners']);
   });
 
   it('"Erros da página" não instala nada na página', () => {
@@ -54,7 +57,7 @@ describe('coletoresDaSelecao', () => {
 
 describe('normalizarSelecao', () => {
   it('descarta valores desconhecidos, repetições e entradas que não são lista', () => {
-    expect(normalizarSelecao(['carregamento', 'memoria', 'carregamento', 3])).toEqual(['carregamento']);
+    expect(normalizarSelecao(['carregamento', 'cpu', 'carregamento', 3])).toEqual(['carregamento']);
     expect(normalizarSelecao('processamento')).toEqual([]);
     expect(normalizarSelecao(undefined)).toEqual([]);
   });

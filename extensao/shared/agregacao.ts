@@ -5,6 +5,7 @@ import {
   type ErroPagina,
   type EstatisticaMetrica,
   type Intervalo,
+  type LongTask,
   type Lote,
   type MetricasCarregamento,
   type MetricasParciais,
@@ -14,7 +15,16 @@ import {
 } from './types.ts';
 
 export function dadosVazios(): DadosColetados {
-  return { longTasks: [], interacoes: [], documentos: [], errosPagina: [] };
+  return {
+    longTasks: [],
+    interacoes: [],
+    documentos: [],
+    errosPagina: [],
+    medicoes: [],
+    snapshots: [],
+    pausasDeMedicao: [],
+    contadoresDom: { inicio: null, fim: null },
+  };
 }
 
 /** Intervalos de uma execução de cenário, usados para carimbar cada registro com a sua iteração. */
@@ -51,13 +61,31 @@ function carimbar<T extends { iteracao?: number | null }>(
   return mantidos;
 }
 
+/** `true` se a long task coincide com a pausa de um censo de objetos: quem parou a página foi a medição. */
+function duranteMedicao(tarefa: LongTask, pausas: readonly Intervalo[]): boolean {
+  const fim = tarefa.inicio + tarefa.duracao;
+  return pausas.some((pausa) => tarefa.inicio < (pausa.fim ?? Infinity) && fim > pausa.inicio);
+}
+
+/**
+ * Marca as long tasks que já tinham chegado quando a pausa de um censo foi
+ * registrada. As que chegam depois são marcadas em `aplicarLote`.
+ */
+export function marcarLongTasksDaMedicao(dados: DadosColetados): void {
+  for (const tarefa of dados.longTasks) {
+    if (!tarefa.causadaPelaMedicao && duranteMedicao(tarefa, dados.pausasDeMedicao)) tarefa.causadaPelaMedicao = true;
+  }
+}
+
 /**
  * Junta um lote vindo da página aos dados da sessão. Altera e devolve `dados`.
  * Com `marcacao` (execução de cenário), cada registro recebe o número da iteração
  * em que começou, e o que ocorreu durante o aquecimento é descartado.
  */
 export function aplicarLote(dados: DadosColetados, lote: Lote, marcacao?: Marcacao): DadosColetados {
-  dados.longTasks.push(...carimbar(lote.longTasks, (tarefa) => tarefa.inicio, marcacao));
+  for (const tarefa of carimbar(lote.longTasks, (t) => t.inicio, marcacao)) {
+    dados.longTasks.push(duranteMedicao(tarefa, dados.pausasDeMedicao) ? { ...tarefa, causadaPelaMedicao: true } : tarefa);
+  }
 
   // A mesma interação pode chegar em dois lotes (pointerdown em um, click no seguinte):
   // fica o registro mais demorado.
@@ -91,7 +119,8 @@ export function aplicarErroPagina(dados: DadosColetados, erro: ErroPagina, marca
 
 /**
  * Mediana, p75 e p95 de cada métrica por iteração, só entre as iterações completas.
- * Uma iteração sem interação não entra na amostra de "pior interação".
+ * Uma iteração sem interação não entra na amostra de "pior interação". Long tasks
+ * causadas pela medição (censo de objetos) não contam.
  */
 export function estatisticasDaExecucao(
   dados: DadosColetados,
@@ -105,7 +134,7 @@ export function estatisticasDaExecucao(
   if (!selecao.includes('processamento')) return estatisticas;
 
   const tempoLongTasks = completas.map((iteracao) =>
-    dados.longTasks.filter((t) => t.iteracao === iteracao.numero).reduce((total, t) => total + t.duracao, 0),
+    dados.longTasks.filter((t) => t.iteracao === iteracao.numero && !t.causadaPelaMedicao).reduce((total, t) => total + t.duracao, 0),
   );
   const piorInteracao = completas
     .map((iteracao) => dados.interacoes.filter((i) => i.iteracao === iteracao.numero).map((i) => i.duracao))
@@ -125,6 +154,8 @@ export function resumir(dados: DadosColetados): StatusResumido {
     piorLongTask: dados.longTasks.length ? Math.max(...dados.longTasks.map((t) => t.duracao)) : null,
     carregamentos: dados.documentos.length,
     errosPagina: dados.errosPagina.length,
+    heapUsado: dados.medicoes.filter((m) => m.heapUsado !== null).at(-1)?.heapUsado ?? null,
+    snapshots: dados.snapshots.length,
   };
 }
 

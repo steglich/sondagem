@@ -109,7 +109,13 @@ chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((erro: unknown) => console.error('Sondagem: falha ao configurar o side panel', erro));
 
-const TIPOS_DE_COMANDO: readonly string[] = ['obter-visao', 'iniciar', 'parar', 'cancelar'] satisfies ComandoInterface['tipo'][];
+const TIPOS_DE_COMANDO: readonly string[] = [
+  'obter-visao',
+  'iniciar',
+  'parar',
+  'cancelar',
+  'tirar-snapshot',
+] satisfies ComandoInterface['tipo'][];
 
 function ehComando(mensagem: unknown): mensagem is ComandoInterface {
   const tipo = (mensagem as { tipo?: unknown } | null)?.tipo;

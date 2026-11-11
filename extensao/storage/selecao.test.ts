@@ -32,7 +32,7 @@ describe('memória da seleção', () => {
     expect(await lerSelecao(armazenamento, 'cenario-login')).toEqual(['processamento']);
     // Sem nada salvo: na sessão manual, só o que não exige o debugger; em cenário, tudo.
     
-    expect(await lerSelecao(armazenamento, contextoDoCenario('novo'))).toEqual(['processamento', 'carregamento', 'erros-pagina']);
+    expect(await lerSelecao(armazenamento, contextoDoCenario('novo'))).toEqual(['processamento', 'carregamento', 'erros-pagina', 'memoria', 'dom-listeners']);
   });
 
   it('guarda apenas a seleção', async () => {

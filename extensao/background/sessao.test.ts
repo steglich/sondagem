@@ -16,6 +16,7 @@ function criarAmbiente(gravado?: EstadoSessao) {
   const injetadas: number[] = [];
   let estadoGravado = gravado;
   const transporte = criarTransporteFalso();
+  const periodicas = new Set<() => void>();
   const ambiente: AmbienteSessao = {
     lerEstado: async () => structuredClone(estadoGravado),
     gravarEstado: async (estado) => void (estadoGravado = structuredClone(estado)),
@@ -31,6 +32,10 @@ function criarAmbiente(gravado?: EstadoSessao) {
     agora: () => Date.now(),
     criarCdp: () => criarConexaoCdp(transporte),
     soltarDepurador: async (idAba) => transporte.anexadas.delete(idAba),
+    repetir: (acao) => {
+      periodicas.add(acao);
+      return () => void periodicas.delete(acao);
+    },
   };
   return { ambiente, abas, scripts, publicadas, injetadas, transporte, gravado: () => estadoGravado };
 }
@@ -200,6 +205,8 @@ describe('orquestração da sessão', () => {
         piorLongTask: 109,
         carregamentos: 1,
         errosPagina: 0,
+        heapUsado: null,
+        snapshots: 0,
       });
       expect(gravado()?.sessao?.dados.longTasks).toHaveLength(50);
     });

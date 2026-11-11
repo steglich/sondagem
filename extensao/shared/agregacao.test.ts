@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { aplicarLote, dadosVazios, inpDaAnalise, metricasDeCarregamento, resumir } from './agregacao.ts';
+import {
+  aplicarLote,
+  dadosVazios,
+  estatisticasDaExecucao,
+  inpDaAnalise,
+  marcarLongTasksDaMedicao,
+  metricasDeCarregamento,
+  resumir,
+} from './agregacao.ts';
 import type { Lote } from './types.ts';
 
 const documento = { id: 'doc-1', url: 'http://localhost:4300/cpu-pesada', inicio: 1000 };
@@ -56,10 +64,10 @@ describe('aplicarLote', () => {
 describe('resumir', () => {
   it('conta os registros e aponta a pior long task', () => {
     const dados = dadosVazios();
-    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0, errosPagina: 0 });
+    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0, errosPagina: 0, heapUsado: null, snapshots: 0 });
 
     aplicarLote(dados, lote({ longTasks: [{ inicio: 1, duracao: 60 }, { inicio: 2, duracao: 310 }] }));
-    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1, errosPagina: 0 });
+    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0 });
   });
 });
 
@@ -74,5 +82,48 @@ describe('métricas', () => {
     aplicarLote(dados, lote({ metricas: { INP: 80 } }));
     aplicarLote(dados, lote({ documento: { ...documento, id: 'doc-2' }, metricas: { INP: 320 } }));
     expect(inpDaAnalise(dados)).toBe(320);
+  });
+});
+
+describe('long tasks causadas pela medição', () => {
+  const doc = { id: 'doc-1', url: 'http://localhost:4300/limpa', inicio: 0 };
+  const iteracao = [{ numero: 1, inicio: 0, fim: 10_000, completa: true, passosExecutados: 3 }];
+
+  it('a long task que coincide com a pausa de um snapshot é marcada e não entra nas estatísticas', () => {
+    const dados = dadosVazios();
+    dados.pausasDeMedicao.push({ inicio: 5000, fim: 6000 });
+    aplicarLote(
+      dados,
+      {
+        documento: doc,
+        longTasks: [
+          { inicio: 1000, duracao: 80 },
+          { inicio: 4990, duracao: 1100 },
+          { inicio: 5900, duracao: 200 },
+          { inicio: 6000, duracao: 70 },
+        ],
+        interacoes: [],
+        metricas: {},
+      },
+      { aquecimento: null, iteracoes: iteracao },
+    );
+
+    expect(dados.longTasks.map((t) => t.causadaPelaMedicao ?? false)).toEqual([false, true, true, false]);
+    expect(estatisticasDaExecucao(dados, iteracao, ['processamento'])[1]).toMatchObject({ id: 'tempo-long-tasks', mediana: 150 });
+  });
+
+  it('pausa ainda aberta cobre tudo o que vem depois do início dela', () => {
+    const dados = dadosVazios();
+    dados.pausasDeMedicao.push({ inicio: 5000, fim: null });
+    aplicarLote(dados, { documento: doc, longTasks: [{ inicio: 100, duracao: 60 }, { inicio: 7000, duracao: 60 }], interacoes: [], metricas: {} });
+    expect(dados.longTasks.map((t) => t.causadaPelaMedicao ?? false)).toEqual([false, true]);
+  });
+
+  it('long task que chegou antes de a pausa ser registrada é marcada depois', () => {
+    const dados = dadosVazios();
+    aplicarLote(dados, { documento: doc, longTasks: [{ inicio: 5100, duracao: 300 }, { inicio: 9000, duracao: 60 }], interacoes: [], metricas: {} });
+    dados.pausasDeMedicao.push({ inicio: 5000, fim: 5500 });
+    marcarLongTasksDaMedicao(dados);
+    expect(dados.longTasks.map((t) => t.causadaPelaMedicao ?? false)).toEqual([true, false]);
   });
 });

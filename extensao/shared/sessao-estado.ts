@@ -7,6 +7,7 @@
 import { dadosVazios, estatisticasDaExecucao, resumir } from './agregacao.ts';
 import type { Cenario } from './cenario.ts';
 import { andamentoInicial } from './execucao-estado.ts';
+import { analisarMemoria } from './memoria.ts';
 import type {
   ConfiguracaoExecucao,
   Desfecho,
@@ -70,11 +71,14 @@ export function concluir(estado: EstadoSessao, fim: DadosFim): Transicao {
   const { tipo, url, selecao, inicio, dados, conexaoPerdida } = estado.sessao;
   const cancelada = fim.desfecho === 'cancelada';
   let cenario: ResultadoCenario | null = null;
+  // Sessão manual: sem iterações comparáveis, a memória sai sem série e sem classificação.
+  let iteracoesDaAnalise: ResultadoCenario['iteracoes'] | null = null;
   if (estado.sessao.cenario) {
     const { configuracao, andamento } = estado.sessao.cenario;
     // Uma iteração que não chegou ao fim (erro, cancelamento, conexão perdida) é incompleta.
     const iteracoes = andamento.iteracoes.map((i) => (i.fim === null ? { ...i, fim: fim.fim, completa: false } : i));
     const completas = iteracoes.filter((i) => i.completa).length;
+    iteracoesDaAnalise = iteracoes;
     cenario = {
       configuracao,
       estadoFinal: andamento.estado,
@@ -99,6 +103,7 @@ export function concluir(estado: EstadoSessao, fim: DadosFim): Transicao {
     paginaRespondeu: fim.paginaRespondeu,
     conexaoPerdida,
     cenario,
+    memoria: cancelada ? null : analisarMemoria(dados, selecao, iteracoesDaAnalise),
   };
   return { ok: true, estado: { fase: 'ociosa', sessao: null, resultado } };
 }

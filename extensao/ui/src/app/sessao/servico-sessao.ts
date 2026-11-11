@@ -56,6 +56,11 @@ export class ServicoSessao {
     return this.comando({ tipo: 'cancelar' });
   }
 
+  /** Sessão manual com "Memória": tira um heap snapshot agora. */
+  tirarSnapshot(): Promise<RespostaComando> {
+    return this.comando({ tipo: 'tirar-snapshot' });
+  }
+
   private async comando(comando: ComandoInterface): Promise<RespostaComando> {
     const resposta = await this.ponte.enviar(comando);
     this.pendente = resposta.visao;

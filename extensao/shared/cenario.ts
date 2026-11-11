@@ -6,6 +6,7 @@
  * conhecida, `vezes` válido, rótulos únicos) fica em `checagemComplementar`.
  */
 import validarEstrutura, { type ErroBruto } from './gerado/validador-cenario.js';
+import type { IdVerificacao } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -314,8 +315,8 @@ export function resolverVezes(vezes: number | 'iteracoes', iteracoes: number): n
 // Passos de medição
 // ---------------------------------------------------------------------------
 
-/** Verificação de que cada passo de medição depende. "memoria" é registrada na fase 3. */
-export const VERIFICACAO_DO_PASSO: Readonly<Record<PassoDeMedicao['tipo'], string>> = {
+/** Verificação de que cada passo de medição depende. */
+export const VERIFICACAO_DO_PASSO: Readonly<Record<PassoDeMedicao['tipo'], IdVerificacao>> = {
   medir: 'memoria',
   snapshot: 'memoria',
   forcar_gc: 'memoria',
@@ -326,8 +327,8 @@ function ehMedicao(passo: Passo): passo is PassoDeMedicao {
 }
 
 /**
- * `false` para um passo de medição cuja verificação não está marcada (ou ainda não
- * existe): o runner não o executa. Passos de ação e `repetir` estão sempre ativos.
+ * `false` para um passo de medição cuja verificação não está marcada: o runner não
+ * o executa. Passos de ação e `repetir` estão sempre ativos.
  */
 export function passoAtivo(passo: Passo, verificacoesAtivas: readonly string[]): boolean {
   return !ehMedicao(passo) || verificacoesAtivas.includes(VERIFICACAO_DO_PASSO[passo.tipo]);
@@ -351,6 +352,13 @@ export function filtrarPassosDeMedicao(passos: readonly Passo[], verificacoesAti
     }
   }
   return filtrados;
+}
+
+/** `true` se o cenário tem algum passo que depende da verificação dada (inclusive dentro de `repetir`). */
+export function temPassoDe(passos: readonly Passo[], verificacao: IdVerificacao): boolean {
+  return passos.some((passo) =>
+    passo.tipo === 'repetir' ? temPassoDe(passo.passos, verificacao) : ehMedicao(passo) && VERIFICACAO_DO_PASSO[passo.tipo] === verificacao,
+  );
 }
 
 /** Texto curto do throttling para a confirmação e o resultado. */
