@@ -1,0 +1,46 @@
+# Dependências
+node_modules/
+
+# Saídas de build
+dist/
+.angular/
+*.tsbuildinfo
+
+# Testes
+coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Perfis do Chrome usados em testes locais
+.chrome-profile/
+perfil-teste/
+
+# Pacotes da extensão
+*.crx
+*.pem
+*.zip
+
+# Dados brutos de medição
+*.heapsnapshot
+*.cpuprofile
+
+# Variáveis de ambiente
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor e sistema
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Configuração local do Claude Code
+.claude/settings.local.json
