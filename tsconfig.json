@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["chrome", "node"]
+  },
+  "include": [
+    "extensao/background/**/*.ts",
+    "extensao/injected/**/*.ts",
+    "extensao/shared/**/*.ts",
+    "extensao/storage/**/*.ts",
+    "pagina-teste/**/*.ts",
+    "testes/**/*.ts",
+    "*.config.ts"
+  ]
+}

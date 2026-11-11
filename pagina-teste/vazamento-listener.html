@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vazamento de listener · Página de teste</title>
+    <link rel="stylesheet" href="/estilo.css" />
+    <script type="module" src="/vazamento-listener.ts"></script>
+  </head>
+  <body>
+    <p><a href="/" data-testid="voltar-indice">← Casos</a></p>
+    <h1>Vazamento de listener</h1>
+    <p>Cada abertura registra um listener de <code>resize</code> em <code>window</code> que nunca é removido.</p>
+    <button type="button" data-testid="abrir-componente">Abrir</button>
+    <button type="button" data-testid="fechar-componente">Fechar</button>
+    <div id="area"></div>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Sondagem",
+  "description": "Testa a performance de páginas web em desenvolvimento: vazamentos de memória e problemas de processamento.",
+  "version": "0.0.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Abrir a Sondagem"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

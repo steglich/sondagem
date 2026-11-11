@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Página de teste da Sondagem</title>
+    <link rel="stylesheet" href="/estilo.css" />
+  </head>
+  <body>
+    <h1>Página de teste da Sondagem</h1>
+    <p>Casos com problemas de performance conhecidos, usados para validar as detecções da extensão.</p>
+    <ul>
+      <li><a href="/limpa" data-testid="caso-limpa">Limpa</a>: controle, sem vazamentos.</li>
+      <li>
+        <a href="/vazamento-listener" data-testid="caso-vazamento-listener">Vazamento de listener</a>:
+        cada abertura registra um listener global que nunca é removido.
+      </li>
+      <li>
+        <a href="/vazamento-dom" data-testid="caso-vazamento-dom">Vazamento de DOM</a>:
+        nós removidos ficam retidos em um array global.
+      </li>
+      <li>
+        <a href="/cpu-pesada" data-testid="caso-cpu-pesada">CPU pesada</a>:
+        um clique bloqueia a thread principal por 300 ms em <code>calculoPesado</code>.
+      </li>
+    </ul>
+  </body>
+</html>

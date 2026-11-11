@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>CPU pesada · Página de teste</title>
+    <link rel="stylesheet" href="/estilo.css" />
+    <script type="module" src="/cpu-pesada.ts"></script>
+  </head>
+  <body>
+    <p><a href="/" data-testid="voltar-indice">← Casos</a></p>
+    <h1>CPU pesada</h1>
+    <p>O clique chama <code>calculoPesado</code>, que bloqueia a thread principal por 300 ms.</p>
+    <button type="button" data-testid="acao-pesada">Calcular</button>
+    <p>Resultado: <output data-testid="resultado-pesado">—</output></p>
+  </body>
+</html>
