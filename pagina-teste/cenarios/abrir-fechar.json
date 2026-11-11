@@ -1,0 +1,32 @@
+{
+  "versao_esquema": 1,
+  "nome": "abrir-fechar",
+  "descricao": "Abre e fecha o componente da página limpa. Serve de controle: não deve haver vazamento.",
+  "url_inicial": "http://localhost:4300/limpa",
+  "execucao": { "iteracoes": 5 },
+  "aquecimento": [
+    { "tipo": "clicar", "seletor": "[data-testid='abrir-componente']" },
+    { "tipo": "clicar", "seletor": "[data-testid='fechar-componente']" }
+  ],
+  "passos": [
+    { "tipo": "forcar_gc" },
+    { "tipo": "forcar_gc" },
+    { "tipo": "snapshot", "rotulo": "inicio" },
+    {
+      "tipo": "repetir",
+      "vezes": "iteracoes",
+      "passos": [
+        { "tipo": "clicar", "seletor": "[data-testid='abrir-componente']" },
+        { "tipo": "esperar", "seletor": "#area .componente" },
+        { "tipo": "clicar", "seletor": "[data-testid='fechar-componente']" },
+        { "tipo": "aguardar_inatividade", "ms": 100 },
+        { "tipo": "forcar_gc" },
+        { "tipo": "forcar_gc" },
+        { "tipo": "medir", "metricas": ["heap_usado", "nos_dom", "listeners"] }
+      ]
+    },
+    { "tipo": "forcar_gc" },
+    { "tipo": "forcar_gc" },
+    { "tipo": "snapshot", "rotulo": "fim" }
+  ]
+}

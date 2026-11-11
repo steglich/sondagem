@@ -4,7 +4,7 @@
  *
  * Este arquivo nunca pode depender do framework de interface.
  */
-import type { Coletor, Interacao, LongTask } from '../shared/types.ts';
+import { ALVO_DESCONHECIDO, type Coletor, type Interacao, type LongTask } from '../shared/types.ts';
 
 /** Interações mais curtas que isto não são entregues pelo navegador. */
 export const LIMIAR_INTERACAO_MS = 40;
@@ -42,7 +42,7 @@ interface ElementoDescritivel {
 /** Descrição curta do alvo de uma interação: tag com `data-testid`, `id` ou classes. */
 export function descreverAlvo(alvo: unknown): string {
   const elemento = alvo as ElementoDescritivel | null | undefined;
-  if (!elemento || typeof elemento.tagName !== 'string') return '(elemento removido)';
+  if (!elemento || typeof elemento.tagName !== 'string') return ALVO_DESCONHECIDO;
   const tag = elemento.tagName.toLowerCase();
   const idTeste = elemento.getAttribute?.('data-testid');
   if (idTeste) return `${tag}[data-testid="${idTeste}"]`;
@@ -82,7 +82,12 @@ export function criarColeta(opcoes: OpcoesColeta): Coleta {
       // Eventos sem interactionId não são interações do usuário (ex.: mouseover).
       if (!id) return;
       const anterior = interacoes.get(id);
-      if (anterior && anterior.duracao >= evento.duration) return;
+      if (anterior && anterior.duracao >= evento.duration) {
+        // Mesmo sem ser o mais demorado, este evento pode trazer o alvo que faltava: em cliques
+        // rápidos o navegador entrega o pointerdown sem alvo e o click, de mesma duração, com ele.
+        if (anterior.alvo === ALVO_DESCONHECIDO && evento.target) anterior.alvo = descreverAlvo(evento.target);
+        return;
+      }
       interacoes.set(id, {
         id,
         documento,

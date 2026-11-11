@@ -16,6 +16,8 @@ declare global {
   interface Window {
     estadoTeste: EstadoTeste;
     nosRetidos?: HTMLElement[];
+    /** Só no caso /erros: quantos erros não tratados a página já produziu. */
+    errosProduzidos?: { excecoes: number; rejeicoes: number };
   }
 }
 

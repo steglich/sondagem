@@ -1,14 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { VERIFICACOES, coletoresDaSelecao, normalizarSelecao, selecaoPadrao } from './verificacoes.ts';
+import {
+  VERIFICACOES,
+  coletoresDaSelecao,
+  normalizarSelecao,
+  selecaoPadrao,
+  verificacoesComDebugger,
+} from './verificacoes.ts';
 
 describe('registro de verificações', () => {
-  it('oferece Processamento e Carregamento, ambas rodando só com a página', () => {
-    expect(VERIFICACOES.map((v) => v.nome)).toEqual(['Processamento', 'Carregamento']);
-    expect(VERIFICACOES.every((v) => v.exige === 'pagina')).toBe(true);
+  it('oferece Processamento, Carregamento e Erros da página', () => {
+    expect(VERIFICACOES.map((v) => v.nome)).toEqual(['Processamento', 'Carregamento', 'Erros da página']);
   });
 
-  it('a seleção padrão marca todas', () => {
+  it('marca quais verificações exigem o debugger', () => {
+    expect(Object.fromEntries(VERIFICACOES.map((v) => [v.id, v.exige]))).toEqual({
+      processamento: 'pagina',
+      carregamento: 'pagina',
+      'erros-pagina': 'debugger',
+    });
+    expect(verificacoesComDebugger(['carregamento', 'erros-pagina']).map((v) => v.nome)).toEqual(['Erros da página']);
+    expect(verificacoesComDebugger(['carregamento', 'processamento'])).toEqual([]);
+  });
+
+  it('a seleção padrão da sessão manual deixa de fora o que exige o debugger; a de cenário marca tudo', () => {
     expect(selecaoPadrao()).toEqual(['processamento', 'carregamento']);
+    expect(selecaoPadrao(true)).toEqual(['processamento', 'carregamento', 'erros-pagina']);
+  });
+
+  it('"Erros da página" não instala nada na página', () => {
+    expect(coletoresDaSelecao(['erros-pagina'])).toEqual([]);
   });
 });
 

@@ -1,10 +1,10 @@
-# Spec Delta
+# conexao-debugger Specification
 
 ## Purpose
 
 Controla a conexão da extensão com o debugger do Chrome na aba analisada: quando anexar, como reagir a falhas e a garantia de que a conexão é sempre desfeita.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Debugger anexado apenas durante a análise
 A extensão MUST anexar o debugger somente depois da confirmação de uma análise que exige isso e MUST desanexá-lo ao término, inclusive em caso de erro ou cancelamento. Sem análise ativa, a extensão MUST NOT manter o debugger anexado.
@@ -21,7 +21,7 @@ A extensão MUST anexar o debugger somente depois da confirmação de uma análi
 Se o debugger não puder ser anexado, a extensão MUST NOT prosseguir, MUST exibir mensagem clara no side panel e MUST indicar quais verificações escolhidas dependem do debugger.
 
 #### Scenario: Outro depurador já anexado à aba
-- **WHEN** o usuário confirma a análise e a anexação falha porque outro depurador (como o DevTools) já está anexado à aba
+- **WHEN** o usuário confirma a análise e a aba já tem outro depurador anexado (como o DevTools), detectado antes de anexar ou pela falha da anexação
 - **THEN** nenhuma execução começa e o side panel informa que há um depurador aberto na aba, orientando a fechá-lo ou a usar uma janela de teste dedicada
 
 #### Scenario: Aba que não aceita depuração
@@ -32,7 +32,7 @@ Se o debugger não puder ser anexado, a extensão MUST NOT prosseguir, MUST exib
 A extensão MUST NOT tentar fechar, reabrir ou substituir outro depurador anexado à aba.
 
 #### Scenario: Conflito detectado
-- **WHEN** a anexação falha por conflito com outro depurador
+- **WHEN** a extensão detecta outro depurador anexado à aba
 - **THEN** a extensão apenas informa o usuário e não age sobre o outro depurador
 
 ### Requirement: Perda de conexão tratada

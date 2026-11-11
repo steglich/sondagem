@@ -1,3 +1,4 @@
+import type { Cenario } from '../../../../shared/cenario';
 import type {
   ComandoInterface,
   ContextoSelecao,
@@ -18,6 +19,7 @@ export const VISAO_OCIOSA: VisaoSessao = {
   selecao: [],
   inicio: null,
   status: null,
+  execucao: null,
   resultado: null,
 };
 
@@ -27,7 +29,8 @@ export function visaoAtiva(status: Partial<StatusResumido> = {}): VisaoSessao {
     alvo: { idAba: 5, url: URL_TESTE },
     selecao: ['processamento', 'carregamento'],
     inicio: 1000,
-    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, ...status },
+    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, errosPagina: 0, ...status },
+    execucao: null,
     resultado: null,
   };
 }
@@ -55,6 +58,7 @@ export const RESULTADO_FIXO: ResultadoSessao = {
       },
     ],
     documentos: [{ id: 'doc-1', url: URL_TESTE, inicio: 900, metricas: { FCP: 120, CLS: 0, TTFB: 35.5, INP: 328 } }],
+    errosPagina: [],
   },
   limpeza: [
     { recurso: 'script-registrado', quantidade: 1 },
@@ -64,6 +68,67 @@ export const RESULTADO_FIXO: ResultadoSessao = {
     { recurso: 'temporizador', quantidade: 2 },
   ],
   paginaRespondeu: true,
+  conexaoPerdida: null,
+  cenario: null,
+};
+
+export const CENARIO_TESTE: Cenario = {
+  versao_esquema: 1,
+  nome: 'abrir-fechar',
+  url_inicial: 'http://localhost:4300/limpa',
+  execucao: { iteracoes: 20, throttling: 'padrao' },
+  passos: [
+    {
+      tipo: 'repetir',
+      vezes: 'iteracoes',
+      passos: [
+        { tipo: 'clicar', seletor: "[data-testid='abrir-componente']" },
+        { tipo: 'clicar', seletor: "[data-testid='fechar-componente']" },
+      ],
+    },
+  ],
+};
+
+/** Execução de 20 iterações, uma delas com passo pulado, e dois erros da página. */
+export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
+  tipo: 'cenario',
+  desfecho: 'concluida',
+  url: CENARIO_TESTE.url_inicial,
+  selecao: ['processamento', 'erros-pagina'],
+  inicio: 1000,
+  fim: 31_000,
+  dados: {
+    longTasks: [{ inicio: 3000, duracao: 120, iteracao: 1 }],
+    interacoes: [],
+    documentos: [],
+    errosPagina: [
+      { tipo: 'excecao', mensagem: 'Error: falha de propósito', arquivo: 'http://localhost:4300/erros.ts', linha: 12, coluna: 9, instante: 6000, iteracao: 5 },
+      { tipo: 'rejeicao', mensagem: 'pedido recusado', arquivo: null, linha: null, coluna: null, instante: 9500, iteracao: null },
+    ],
+  },
+  limpeza: [
+    { recurso: 'script-registrado', quantidade: 1 },
+    { recurso: 'depurador', quantidade: 1 },
+  ],
+  paginaRespondeu: true,
+  conexaoPerdida: null,
+  cenario: {
+    configuracao: { nome: 'abrir-fechar', urlInicial: CENARIO_TESTE.url_inicial, iteracoes: 20, throttling: 'padrao', versaoBuild: '1.4.2' },
+    estadoFinal: 'concluida',
+    ambiente: { versaoNavegador: '158.0.8127.18', userAgent: 'Mozilla/5.0 Chrome/158.0.0.0', janela: { largura: 1280, altura: 720 }, dpr: 2 },
+    iteracoes: [],
+    iteracoesCompletas: 19,
+    iteracoesIncompletas: 1,
+    passosExecutados: 39,
+    falhas: [
+      { caminho: '/passos/0/passos/1', tipoPasso: 'clicar', iteracao: 4, motivo: 'Tempo limite de 200 ms: nenhum elemento corresponde a "#x".', acao: 'pulou' },
+    ],
+    estatisticas: [
+      { id: 'duracao-iteracao', amostras: 19, mediana: 1400, p75: 1450.5, p95: 1600 },
+      { id: 'tempo-long-tasks', amostras: 19, mediana: 0, p75: 60, p95: 118.25 },
+      { id: 'pior-interacao', amostras: 0, mediana: null, p75: null, p95: null },
+    ],
+  },
 };
 
 /** Ponte em memória: faz o papel do service worker e do `chrome.storage.local`. */
@@ -75,13 +140,21 @@ export class PonteSimulada extends PonteExtensao {
   /** Resposta forçada para o próximo comando `iniciar`. */
   recusaAoIniciar: Extract<RespostaComando, { ok: false }> | null = null;
   readonly selecoes = new Map<ContextoSelecao, Selecao>();
+  readonly cenarios = new Map<string, Cenario>();
+  cenarioSelecionado: string | null = null;
   private readonly ouvintes = new Set<(visao: VisaoSessao) => void>();
 
   override async enviar(comando: ComandoInterface): Promise<RespostaComando> {
     this.comandos.push(comando);
     if (comando.tipo === 'iniciar') {
       if (this.recusaAoIniciar) return this.recusaAoIniciar;
-      this.visao = { ...visaoAtiva(), selecao: comando.selecao };
+      this.visao = {
+        ...visaoAtiva(),
+        selecao: comando.selecao,
+        execucao: comando.cenario
+          ? { nome: (comando.cenario.definicao as Cenario).nome, estado: 'preparando', iteracao: 0, totalIteracoes: comando.cenario.iteracoes ?? 5 }
+          : null,
+      };
     } else if (comando.tipo === 'parar' || comando.tipo === 'cancelar') {
       const desfecho = comando.tipo === 'parar' ? 'concluida' : 'cancelada';
       this.visao = { ...VISAO_OCIOSA, resultado: { ...RESULTADO_FIXO, desfecho } };
@@ -99,7 +172,7 @@ export class PonteSimulada extends PonteExtensao {
   }
 
   override async lerSelecao(contexto: ContextoSelecao): Promise<Selecao> {
-    return this.selecoes.get(contexto) ?? selecaoPadrao();
+    return this.selecoes.get(contexto) ?? selecaoPadrao(contexto !== 'manual');
   }
 
   override async salvarSelecao(contexto: ContextoSelecao, selecao: Selecao): Promise<void> {
@@ -108,6 +181,27 @@ export class PonteSimulada extends PonteExtensao {
 
   override abrirRelatorio(): void {
     this.relatoriosAbertos++;
+  }
+
+  override async listarCenarios(): Promise<Cenario[]> {
+    return [...this.cenarios.values()].sort((a, b) => a.nome.localeCompare(b.nome));
+  }
+
+  override async salvarCenario(cenario: Cenario): Promise<void> {
+    this.cenarios.set(cenario.nome, cenario);
+  }
+
+  override async removerCenario(nome: string): Promise<void> {
+    this.cenarios.delete(nome);
+    if (this.cenarioSelecionado === nome) this.cenarioSelecionado = null;
+  }
+
+  override async lerCenarioSelecionado(): Promise<string | null> {
+    return this.cenarioSelecionado;
+  }
+
+  override async selecionarCenario(nome: string | null): Promise<void> {
+    this.cenarioSelecionado = nome;
   }
 
   /** Publica uma visão, como o service worker faria. */

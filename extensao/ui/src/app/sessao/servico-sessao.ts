@@ -3,6 +3,7 @@ import { criarLimitador } from '../../../../shared/limitador';
 import {
   type ComandoInterface,
   INTERVALO_LOTE_MS,
+  type PedidoCenario,
   type RespostaComando,
   type Selecao,
   type VisaoSessao,
@@ -15,6 +16,7 @@ const VISAO_OCIOSA: VisaoSessao = {
   selecao: [],
   inicio: null,
   status: null,
+  execucao: null,
   resultado: null,
 };
 
@@ -41,8 +43,9 @@ export class ServicoSessao {
     void this.comando({ tipo: 'obter-visao' }).catch(() => undefined);
   }
 
-  iniciar(idAba: number, selecao: Selecao): Promise<RespostaComando> {
-    return this.comando({ tipo: 'iniciar', idAba, selecao });
+  /** Com `cenario`, executa o cenário; sem ele, inicia uma sessão manual. */
+  iniciar(idAba: number, selecao: Selecao, cenario?: PedidoCenario): Promise<RespostaComando> {
+    return this.comando({ tipo: 'iniciar', idAba, selecao, ...(cenario ? { cenario } : {}) });
   }
 
   parar(): Promise<RespostaComando> {
@@ -61,7 +64,12 @@ export class ServicoSessao {
   }
 
   private receber(visao: VisaoSessao): void {
-    const mudouDeFase = visao.fase !== this.pendente.fase;
+    // O estado da execução e a iteração também aparecem na hora: o limite de uma
+    // publicação por segundo já foi aplicado pelo service worker.
+    const mudouDeFase =
+      visao.fase !== this.pendente.fase ||
+      visao.execucao?.estado !== this.pendente.execucao?.estado ||
+      visao.execucao?.iteracao !== this.pendente.execucao?.iteracao;
     this.pendente = visao;
     if (mudouDeFase) this.limitador.imediato();
     else this.limitador.solicitar();

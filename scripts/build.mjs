@@ -12,6 +12,7 @@ import { copyFile, mkdir, rm, watch } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
+import { gravarValidador } from './gerar-validador.mjs';
 
 const raiz = join(dirname(fileURLToPath(import.meta.url)), '..');
 const saida = join(raiz, 'dist', 'extensao');
@@ -73,6 +74,8 @@ function rodarAngular(argumentos) {
 await rm(saida, { recursive: true, force: true });
 await mkdir(saida, { recursive: true });
 await copiarManifesto();
+// O validador do cenário é código gerado: a CSP da extensão proíbe compilar o schema em tempo de execução.
+await gravarValidador();
 
 if (modoWatch) {
   for (const opcoes of bundles) {

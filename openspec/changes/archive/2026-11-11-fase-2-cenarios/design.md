@@ -67,3 +67,45 @@ Cenários em `chrome.storage.local`, indexados pelo nome. Resultados continuam e
 ## Open Questions
 
 - O plano assume que anexar o debugger falha quando o DevTools está aberto na aba. Versões recentes do Chrome aceitam mais de um cliente de depuração, então a anexação pode ter sucesso mesmo com o DevTools aberto. A primeira tarefa desta fase verifica o comportamento na versão em uso. O requisito está escrito de forma que vale nos dois casos (falha ao anexar → parar com mensagem). Se a anexação não falhar com o DevTools aberto, a detecção desse caso específico fica sem meio técnico e deve ser rediscutida com o autor.
+
+### Resultado da tarefa 1.1 (2026-11-11)
+
+Protótipo mínimo (extensão só com a permissão `debugger`), em Google Chrome for Testing 158.0.8127.18 no Linux, chamando `chrome.debugger.attach(alvo, '1.3')`:
+
+| Situação | Resultado |
+|---|---|
+| DevTools aberto na aba | **Sucesso.** A anexação funciona e `Runtime.evaluate` responde normalmente |
+| Outra extensão já anexada à aba | **Sucesso** |
+| A mesma extensão anexando duas vezes | Erro: `Another debugger is already attached to the tab with id: <id>.` |
+| `chrome://version` | Erro: `Cannot access a chrome:// URL` |
+| Página de outra extensão | Erro: `Cannot access a chrome-extension:// URL of different extension` |
+| Loja de extensões | Erro: `The extensions gallery cannot be scripted.` |
+| Aba inexistente | Erro: `No tab with given id <id>.` |
+| `detach` sem estar anexado | Erro: `Debugger is not attached to the tab with id: <id>.` |
+
+Conclusão: nesta versão do Chrome a anexação **não falha** com o DevTools aberto nem com outro depurador de extensão. A detecção "DevTools aberto" pela falha de anexação, prevista no plano (seção 3.1), não tem como acontecer. Conforme a tarefa 1.1, o grupo 3 fica parado até o autor decidir.
+
+Dado complementar, medido sem nenhum outro cliente de depuração: `chrome.debugger.getTargets()` devolve `attached: true` para a aba quando o DevTools está aberto e `attached: false` quando não está. Esse campo indica que existe algum cliente anexado (DevTools, outra extensão ou automação), sem dizer qual. É um meio técnico possível para avisar o usuário antes de anexar, se o autor quiser manter o aviso.
+
+### Decisão do autor (2026-11-11): avisar e bloquear
+
+Como a anexação não falha mais, a detecção passa a ser feita **antes de anexar**: o wrapper de CDP consulta `chrome.debugger.getTargets()` e, se a aba já tiver um cliente de depuração (`attached: true`), não anexa e devolve a falha da categoria "outro depurador". O erro `Another debugger is already attached` de `attach` cai na mesma categoria.
+
+Consequências aceitas:
+
+- O bloqueio vale para qualquer cliente de depuração (DevTools, outra extensão, automação), porque o Chrome não informa qual é. A mensagem fala em "depurador aberto na aba" e cita o DevTools como caso mais comum.
+- O Playwright é um cliente de depuração de todas as páginas que controla. Para os testes de integração existe a chave `sondagem:teste:ignorar-depurador-anexado` em `chrome.storage.local`: com valor `true`, a consulta prévia é pulada. A chave não tem interface, só é lida em `service-worker.ts` e é gravada apenas pelos testes. Um teste sem a chave cobre o bloqueio.
+
+## Notas de implementação
+
+Decisões tomadas durante o apply, dentro do que o design já previa:
+
+- **Iterações numeradas.** Cada volta de um `repetir` do nível principal é uma iteração; com mais de um `repetir` nesse nível a numeração continua. Um `repetir` dentro de outro é só um laço. O `aquecimento` aceita apenas passos de ação.
+- **Marcação de iteração pelo relógio do service worker.** O runner registra início e fim de cada iteração com o relógio do service worker, e o agregador carimba os registros por esses intervalos. A mensagem `marcar` enviada à página serve para ela mandar na hora o lote acumulado, em vez de esperar o próximo segundo. Os instantes dos registros vêm do relógio da página (`timeOrigin + startTime`); a diferença entre os dois relógios é de poucos milissegundos.
+- **Campos além do exemplo do plano.** `digitar` tem `texto` e `limpar`; `rolar` tem `x`, `y` e `seletor` opcional; `execucao.throttling` aceita um nome de perfil ou um objeto com `cpu` e `rede`. Todos estão em `docs/cenario.md`.
+- **Caminhos dos erros de execução.** Os passos de medição sem verificação ativa são pulados durante a execução, e não removidos antes, para que o caminho de um passo com erro (`/passos/3/passos/0`) continue apontando para o documento original.
+- **Clique.** A conferência de posição estável custa uma sondagem de 50 ms por clique. Esse tempo entra na duração da iteração, igual em todas.
+- **"Erros da página" na sessão manual.** Como a verificação exige o debugger, marcá-la em uma sessão manual anexa o debugger durante a sessão. Para não abrir a barra de depuração sem o usuário pedir, a seleção padrão da sessão manual traz desmarcadas as verificações que exigem o debugger; em cenário elas vêm marcadas.
+- **Parar um cenário.** Uma execução de cenário só pode ser cancelada; a interface não mostra "Parar" e o comando `parar`, se chegar, é tratado como cancelamento.
+- **Service worker reiniciado.** Uma análise com debugger que sobrevive a um reinício do service worker perdeu o runner e os ouvintes de CDP: é encerrada como interrompida e o debugger é solto.
+- **Teste da barra de depuração.** O botão "Cancelar" da barra não é alcançável por automação. O teste de integração dispara `chrome.debugger.onDetach` com `canceled_by_user`, que é o que a extensão recebe nesse caso.

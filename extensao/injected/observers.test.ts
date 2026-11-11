@@ -77,6 +77,19 @@ describe('coleta de interações', () => {
     expect(interacoes[0]).toMatchObject({ tipo: 'click', duracao: 320, alvo: 'button[data-testid="acao-pesada"]' });
   });
 
+  it('o primeiro evento sem alvo recebe o alvo de outro evento da mesma interação, mesmo de igual duração', () => {
+    const { fabrica, coleta } = coletar(['interacoes']);
+    fabrica.doTipo('event')[0]!.emitir([
+      { name: 'pointerdown', startTime: 2000, duration: 304, interactionId: 41, target: null },
+      { name: 'pointerup', startTime: 2001, duration: 304, interactionId: 41, target: null },
+      { name: 'click', startTime: 2001, duration: 304, interactionId: 41, target: botao },
+    ]);
+
+    expect(coleta.drenar().interacoes).toEqual([
+      expect.objectContaining({ tipo: 'pointerdown', duracao: 304, alvo: 'button[data-testid="acao-pesada"]' }),
+    ]);
+  });
+
   it('ignora eventos que não são interações do usuário', () => {
     const { fabrica, coleta } = coletar(['interacoes']);
     fabrica.doTipo('event')[0]!.emitir([{ name: 'mouseover', startTime: 1, duration: 90, interactionId: 0 }]);

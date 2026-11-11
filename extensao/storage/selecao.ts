@@ -3,7 +3,7 @@
  * a partir da fase 2, o nome de um cenário). Guarda apenas a seleção: nada da
  * página analisada nem de autenticação.
  */
-import type { ContextoSelecao, Selecao } from '../shared/types.ts';
+import { CONTEXTO_MANUAL, type ContextoSelecao, type Selecao } from '../shared/types.ts';
 import { normalizarSelecao, selecaoPadrao } from '../shared/verificacoes.ts';
 
 export const CHAVE_SELECOES = 'sondagem:selecoes';
@@ -19,10 +19,10 @@ async function lerTodas(armazenamento: Armazenamento): Promise<Record<string, un
   return guardado && typeof guardado === 'object' ? { ...(guardado as Record<string, unknown>) } : {};
 }
 
-/** Última seleção do contexto. Sem nada salvo (ou com dado inválido), tudo marcado. */
+/** Última seleção do contexto. Sem nada salvo (ou com dado inválido), vale a seleção padrão do contexto. */
 export async function lerSelecao(armazenamento: Armazenamento, contexto: ContextoSelecao): Promise<Selecao> {
   const todas = await lerTodas(armazenamento);
-  if (!Object.hasOwn(todas, contexto) || !Array.isArray(todas[contexto])) return selecaoPadrao();
+  if (!Object.hasOwn(todas, contexto) || !Array.isArray(todas[contexto])) return selecaoPadrao(contexto !== CONTEXTO_MANUAL);
   return normalizarSelecao(todas[contexto]);
 }
 

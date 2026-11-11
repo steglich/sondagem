@@ -1,14 +1,24 @@
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
+import type { Cenario } from '../../../../shared/cenario';
 import type { Selecao } from '../../../../shared/types';
 import { VERIFICACOES } from '../../../../shared/verificacoes';
-import { URL_TESTE } from './apoio-teste';
-import { Confirmacao } from './confirmacao';
+import { CENARIO_TESTE, URL_TESTE } from './apoio-teste';
+import { type AnaliseConfirmada, Confirmacao } from './confirmacao';
 
-function montar(entradas: { selecaoInicial?: Selecao; bloqueio?: string | null; url?: string } = {}) {
+function montar(
+  entradas: {
+    selecaoInicial?: Selecao;
+    bloqueio?: string | null;
+    url?: string;
+    cenario?: Cenario | null;
+    selecaoCenario?: Selecao | null;
+  } = {},
+) {
   const fixture = TestBed.createComponent(Confirmacao);
   fixture.componentRef.setInput('url', entradas.url ?? URL_TESTE);
-  fixture.componentRef.setInput('modo', 'Sessão manual');
+  fixture.componentRef.setInput('cenario', entradas.cenario ?? null);
+  fixture.componentRef.setInput('selecaoCenario', entradas.selecaoCenario ?? null);
   fixture.componentRef.setInput('verificacoes', VERIFICACOES);
   fixture.componentRef.setInput('selecaoInicial', entradas.selecaoInicial ?? ['processamento', 'carregamento']);
   fixture.componentRef.setInput('bloqueio', entradas.bloqueio ?? null);
@@ -61,14 +71,14 @@ describe('Confirmacao', () => {
 
   it('confirmar emite só as verificações marcadas, na ordem do registro', () => {
     const fixture = montar();
-    const emitidas: Selecao[] = [];
-    fixture.componentInstance.confirmar.subscribe((selecao) => emitidas.push(selecao));
+    const emitidas: AnaliseConfirmada[] = [];
+    fixture.componentInstance.confirmar.subscribe((analise) => emitidas.push(analise));
 
     porId(fixture, 'verificacao-processamento').click();
     fixture.detectChanges();
     porId(fixture, 'confirmar').click();
 
-    expect(emitidas).toEqual([['carregamento']]);
+    expect(emitidas).toEqual([{ modo: 'manual', selecao: ['carregamento'] }]);
   });
 
   it('cancelar emite a desistência sem confirmar', () => {
@@ -90,5 +100,98 @@ describe('Confirmacao', () => {
 
     expect(porId<HTMLButtonElement>(fixture, 'confirmar').disabled).toBe(true);
     expect(porId(fixture, 'confirmacao-impedimento').textContent).toContain('não podem ser analisadas');
+  });
+
+  it('sem cenário escolhido, não oferece a troca de modo nem os campos de cenário', () => {
+    const fixture = montar();
+    expect(existe(fixture, 'modo-cenario')).toBe(false);
+    expect(existe(fixture, 'confirmacao-iteracoes')).toBe(false);
+    expect(existe(fixture, 'confirmacao-cenario')).toBe(false);
+  });
+
+  it('avisa da barra de depuração quando a sessão manual marca uma verificação que usa o debugger', () => {
+    const fixture = montar();
+    expect(existe(fixture, 'confirmacao-aviso-debugger')).toBe(false);
+    porId(fixture, 'verificacao-erros-pagina').click();
+    fixture.detectChanges();
+    expect(existe(fixture, 'confirmacao-aviso-debugger')).toBe(true);
+  });
+
+  describe('com um cenário escolhido', () => {
+    function digitar(fixture: ComponentFixture<unknown>, id: string, valor: string): void {
+      const campo = porId<HTMLInputElement>(fixture, id);
+      campo.value = valor;
+      campo.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+    }
+
+    it('abre no modo cenário, com nome, URL inicial, iterações e throttling', () => {
+      const fixture = montar({ cenario: CENARIO_TESTE });
+
+      expect(porId<HTMLInputElement>(fixture, 'modo-cenario').checked).toBe(true);
+      expect(porId(fixture, 'confirmacao-modo').textContent).toContain('Cenário');
+      expect(porId(fixture, 'confirmacao-cenario').textContent).toContain('abrir-fechar');
+      expect(porId(fixture, 'confirmacao-url-inicial').textContent).toContain('http://localhost:4300/limpa');
+      expect(porId<HTMLInputElement>(fixture, 'confirmacao-iteracoes').value).toBe('20');
+      expect(porId(fixture, 'confirmacao-throttling').textContent).toContain('padrao');
+      expect(porId<HTMLInputElement>(fixture, 'confirmacao-versao-build').value).toBe('');
+      expect(existe(fixture, 'verificacao-processamento')).toBe(true);
+    });
+
+    it('cenário sem iterações nem throttling declarados: 5 iterações, throttling nenhum', () => {
+      const fixture = montar({ cenario: { ...CENARIO_TESTE, execucao: undefined } });
+      expect(porId<HTMLInputElement>(fixture, 'confirmacao-iteracoes').value).toBe('5');
+      expect(porId(fixture, 'confirmacao-throttling').textContent).toContain('nenhum');
+    });
+
+    it('confirmar emite o modo, a seleção, as iterações alteradas e a versão do build', () => {
+      const fixture = montar({ cenario: CENARIO_TESTE, selecaoCenario: ['processamento', 'erros-pagina'] });
+      const emitidas: AnaliseConfirmada[] = [];
+      fixture.componentInstance.confirmar.subscribe((analise) => emitidas.push(analise));
+
+      digitar(fixture, 'confirmacao-iteracoes', '10');
+      digitar(fixture, 'confirmacao-versao-build', '  1.4.2 ');
+      porId(fixture, 'confirmar').click();
+
+      expect(emitidas).toEqual([
+        { modo: 'cenario', selecao: ['processamento', 'erros-pagina'], iteracoes: 10, versaoBuild: '1.4.2' },
+      ]);
+    });
+
+    it('sem versão do build, o campo não é enviado', () => {
+      const fixture = montar({ cenario: CENARIO_TESTE });
+      const emitidas: AnaliseConfirmada[] = [];
+      fixture.componentInstance.confirmar.subscribe((analise) => emitidas.push(analise));
+      porId(fixture, 'confirmar').click();
+
+      expect(emitidas).toEqual([{ modo: 'cenario', selecao: ['processamento', 'carregamento'], iteracoes: 20 }]);
+    });
+
+    it.each(['0', '-2', '1.5', '', 'abc'])('iterações inválidas (%j) impedem a execução', (valor) => {
+      const fixture = montar({ cenario: CENARIO_TESTE });
+      digitar(fixture, 'confirmacao-iteracoes', valor);
+
+      expect(porId<HTMLButtonElement>(fixture, 'confirmar').disabled).toBe(true);
+      expect(porId(fixture, 'confirmacao-impedimento').textContent).toContain('número inteiro de iterações');
+    });
+
+    it('trocar para sessão manual esconde o resumo do cenário e usa a seleção da sessão manual', () => {
+      const fixture = montar({ cenario: CENARIO_TESTE, selecaoInicial: ['carregamento'], selecaoCenario: ['processamento'] });
+      const emitidas: AnaliseConfirmada[] = [];
+      fixture.componentInstance.confirmar.subscribe((analise) => emitidas.push(analise));
+      expect(porId<HTMLInputElement>(fixture, 'verificacao-processamento').checked).toBe(true);
+
+      porId(fixture, 'modo-manual').click();
+      fixture.detectChanges();
+
+      expect(porId(fixture, 'confirmacao-modo').textContent).toContain('Sessão manual');
+      expect(existe(fixture, 'confirmacao-cenario')).toBe(false);
+      expect(existe(fixture, 'confirmacao-iteracoes')).toBe(false);
+      expect(porId<HTMLInputElement>(fixture, 'verificacao-processamento').checked).toBe(false);
+      expect(porId<HTMLInputElement>(fixture, 'verificacao-carregamento').checked).toBe(true);
+
+      porId(fixture, 'confirmar').click();
+      expect(emitidas).toEqual([{ modo: 'manual', selecao: ['carregamento'] }]);
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core';
+import type { Cenario } from '../../../../shared/cenario';
 import type {
   ComandoInterface,
   ContextoSelecao,
@@ -7,6 +8,13 @@ import type {
   Selecao,
   VisaoSessao,
 } from '../../../../shared/types';
+import {
+  lerCenarioSelecionado,
+  listarCenarios,
+  removerCenario,
+  salvarCenario,
+  selecionarCenario,
+} from '../../../../storage/cenarios';
 import { lerSelecao, salvarSelecao } from '../../../../storage/selecao';
 
 export interface AbaAlvo {
@@ -28,6 +36,14 @@ export abstract class PonteExtensao {
   abstract lerSelecao(contexto: ContextoSelecao): Promise<Selecao>;
   abstract salvarSelecao(contexto: ContextoSelecao, selecao: Selecao): Promise<void>;
   abstract abrirRelatorio(): void;
+  /** Cenários salvos na extensão, em ordem alfabética. */
+  abstract listarCenarios(): Promise<Cenario[]>;
+  /** Salva um cenário já validado; outro com o mesmo nome é substituído. */
+  abstract salvarCenario(cenario: Cenario): Promise<void>;
+  abstract removerCenario(nome: string): Promise<void>;
+  /** Nome do cenário escolhido para a próxima análise, ou `null` (sessão manual). */
+  abstract lerCenarioSelecionado(): Promise<string | null>;
+  abstract selecionarCenario(nome: string | null): Promise<void>;
 }
 
 @Injectable()
@@ -73,5 +89,25 @@ export class PonteChrome extends PonteExtensao {
 
   override abrirRelatorio(): void {
     void chrome.tabs.create({ url: chrome.runtime.getURL('index.html#/relatorio') });
+  }
+
+  override listarCenarios(): Promise<Cenario[]> {
+    return listarCenarios(chrome.storage.local);
+  }
+
+  override salvarCenario(cenario: Cenario): Promise<void> {
+    return salvarCenario(chrome.storage.local, cenario);
+  }
+
+  override removerCenario(nome: string): Promise<void> {
+    return removerCenario(chrome.storage.local, nome);
+  }
+
+  override lerCenarioSelecionado(): Promise<string | null> {
+    return lerCenarioSelecionado(chrome.storage.local);
+  }
+
+  override selecionarCenario(nome: string | null): Promise<void> {
+    return selecionarCenario(chrome.storage.local, nome);
   }
 }

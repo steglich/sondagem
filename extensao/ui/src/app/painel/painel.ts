@@ -1,8 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { CONTEXTO_MANUAL, type Selecao } from '../../../../shared/types';
+import type { Cenario } from '../../../../shared/cenario';
+import { CONTEXTO_MANUAL, type FalhaDebugger as Falha, type RespostaComando, type Selecao, contextoDoCenario } from '../../../../shared/types';
 import { avaliarUrl } from '../../../../shared/url';
 import { VERIFICACOES } from '../../../../shared/verificacoes';
-import { Confirmacao } from '../sessao/confirmacao';
+import { Cenarios } from '../cenarios/cenarios';
+import { type AnaliseConfirmada, Confirmacao } from '../sessao/confirmacao';
+import { FalhaDebugger } from '../sessao/falha-debugger';
 import { type AbaAlvo, PonteExtensao } from '../sessao/ponte';
 import { Resultado } from '../sessao/resultado';
 import { ServicoSessao } from '../sessao/servico-sessao';
@@ -12,6 +15,9 @@ interface DadosConfirmacao {
   aba: AbaAlvo | null;
   selecao: Selecao;
   bloqueio: string | null;
+  /** Cenário escolhido na lista, com a última seleção usada nele. */
+  cenario: Cenario | null;
+  selecaoCenario: Selecao | null;
 }
 
 /**
@@ -21,12 +27,14 @@ interface DadosConfirmacao {
 @Component({
   selector: 'sd-painel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Confirmacao, SessaoAtiva, Resultado],
+  imports: [Cenarios, Confirmacao, FalhaDebugger, SessaoAtiva, Resultado],
   template: `
     <main>
       <h1>Sondagem</h1>
 
-      @if (erro(); as mensagem) {
+      @if (falhaDebugger(); as falha) {
+        <sd-falha-debugger [falha]="falha" />
+      } @else if (erro(); as mensagem) {
         <p class="aviso" role="alert" data-testid="erro">{{ mensagem }}</p>
       }
 
@@ -34,6 +42,7 @@ interface DadosConfirmacao {
         <sd-sessao-ativa
           [url]="visao().alvo?.url ?? ''"
           [status]="visao().status"
+          [execucao]="visao().execucao"
           [parando]="visao().fase === 'parando' || encerrando()"
           (parar)="parar()"
           (cancelar)="cancelar()"
@@ -41,9 +50,10 @@ interface DadosConfirmacao {
       } @else if (confirmacao(); as dados) {
         <sd-confirmacao
           [url]="dados.aba?.url"
-          modo="Sessão manual"
           [verificacoes]="verificacoes"
           [selecaoInicial]="dados.selecao"
+          [cenario]="dados.cenario"
+          [selecaoCenario]="dados.selecaoCenario"
           [bloqueio]="dados.bloqueio"
           (confirmar)="confirmar($event)"
           (desistir)="confirmacao.set(null)"
@@ -53,6 +63,7 @@ interface DadosConfirmacao {
         @if (visao().resultado; as resultado) {
           <sd-resultado [resultado]="resultado" />
         }
+        <sd-cenarios />
       }
 
       <footer>
@@ -81,20 +92,37 @@ export class Painel {
   protected readonly confirmacao = signal<DadosConfirmacao | null>(null);
   protected readonly encerrando = signal(false);
   protected readonly erro = signal<string | null>(null);
+  protected readonly falhaDebugger = signal<Falha | null>(null);
 
-  /** Abre a confirmação com a aba alvo e a última seleção usada. Ainda não inicia nada. */
+  /** Abre a confirmação com a aba alvo, o cenário escolhido e a última seleção usada. Ainda não inicia nada. */
   protected async analisar(): Promise<void> {
     this.erro.set(null);
-    const [aba, selecao] = await Promise.all([this.ponte.abaAlvo(), this.ponte.lerSelecao(CONTEXTO_MANUAL)]);
+    this.falhaDebugger.set(null);
+    const [aba, selecao, cenarios, nomeSelecionado] = await Promise.all([
+      this.ponte.abaAlvo(),
+      this.ponte.lerSelecao(CONTEXTO_MANUAL),
+      this.ponte.listarCenarios(),
+      this.ponte.lerCenarioSelecionado(),
+    ]);
+    const cenario = cenarios.find((c) => c.nome === nomeSelecionado) ?? null;
+    const selecaoCenario = cenario ? await this.ponte.lerSelecao(contextoDoCenario(cenario.nome)) : null;
     const avaliacao = avaliarUrl(aba?.url);
-    this.confirmacao.set({ aba, selecao, bloqueio: avaliacao.suportada ? null : avaliacao.motivo });
+    this.confirmacao.set({ aba, selecao, cenario, selecaoCenario, bloqueio: avaliacao.suportada ? null : avaliacao.motivo });
   }
 
-  protected async confirmar(selecao: Selecao): Promise<void> {
-    const aba = this.confirmacao()?.aba;
-    if (!aba) return;
-    await this.ponte.salvarSelecao(CONTEXTO_MANUAL, selecao);
-    await this.executar(() => this.sessao.iniciar(aba.id, selecao));
+  protected async confirmar(analise: AnaliseConfirmada): Promise<void> {
+    const dados = this.confirmacao();
+    const aba = dados?.aba;
+    if (!dados || !aba) return;
+    const cenario = analise.modo === 'cenario' ? dados.cenario : null;
+    await this.ponte.salvarSelecao(cenario ? contextoDoCenario(cenario.nome) : CONTEXTO_MANUAL, analise.selecao);
+    await this.executar(() =>
+      this.sessao.iniciar(
+        aba.id,
+        analise.selecao,
+        cenario ? { definicao: cenario, iteracoes: analise.iteracoes, versaoBuild: analise.versaoBuild ?? null } : undefined,
+      ),
+    );
     this.confirmacao.set(null);
   }
 
@@ -115,10 +143,11 @@ export class Painel {
     this.ponte.abrirRelatorio();
   }
 
-  private async executar(comando: () => Promise<{ ok: boolean; mensagem?: string }>): Promise<void> {
+  private async executar(comando: () => Promise<RespostaComando>): Promise<void> {
     try {
       const resposta = await comando();
       this.erro.set(resposta.ok ? null : (resposta.mensagem ?? 'O comando foi recusado.'));
+      this.falhaDebugger.set(resposta.ok ? null : (resposta.falhaDebugger ?? null));
     } catch (falha) {
       this.erro.set(falha instanceof Error ? falha.message : String(falha));
     }

@@ -1,4 +1,5 @@
-// Falha se os bundles do código de medição contiverem código do Angular.
+// Falha se os bundles do código de medição contiverem código do Angular ou
+// código dinâmico (`eval`, `new Function`), que a CSP da extensão proíbe.
 // Segunda barreira do isolamento; a primeira é a regra no-restricted-imports do ESLint.
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -18,6 +19,12 @@ const marcas = [
   { nome: 'NG0 (código de erro do Angular)', padrao: /\bNG0\d{3}\b/ },
 ];
 
+/** Código que a CSP `script-src 'self'` bloqueia. */
+const dinamico = [
+  { nome: 'new Function', padrao: /\bnew Function\b/ },
+  { nome: 'eval', padrao: /\beval\s*\(/ },
+];
+
 let falhou = false;
 for (const arquivo of arquivos) {
   const conteudo = await readFile(join(raiz, arquivo), 'utf8');
@@ -28,9 +35,16 @@ for (const arquivo of arquivos) {
   } else {
     console.log(`✓ ${arquivo} sem código do Angular`);
   }
+  const proibidas = dinamico.filter((m) => m.padrao.test(conteudo)).map((m) => m.nome);
+  if (proibidas.length > 0) {
+    falhou = true;
+    console.error(`✗ ${arquivo} contém código dinâmico proibido pela CSP: ${proibidas.join(', ')}`);
+  } else {
+    console.log(`✓ ${arquivo} sem eval nem new Function`);
+  }
 }
 
 if (falhou) {
-  console.error('O código de medição não pode incluir o framework de interface.');
+  console.error('O código de medição não pode incluir o framework de interface nem código dinâmico.');
   process.exit(1);
 }

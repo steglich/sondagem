@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { contextoDoCenario } from '../shared/types.ts';
 import { type Armazenamento, CHAVE_SELECOES, lerSelecao, salvarSelecao } from './selecao.ts';
 
 function armazenamentoEmMemoria(inicial: Record<string, unknown> = {}) {
@@ -29,7 +30,9 @@ describe('memória da seleção', () => {
 
     expect(await lerSelecao(armazenamento, 'manual')).toEqual(['carregamento']);
     expect(await lerSelecao(armazenamento, 'cenario-login')).toEqual(['processamento']);
-    expect(await lerSelecao(armazenamento, 'cenario-novo')).toEqual(['processamento', 'carregamento']);
+    // Sem nada salvo: na sessão manual, só o que não exige o debugger; em cenário, tudo.
+    
+    expect(await lerSelecao(armazenamento, contextoDoCenario('novo'))).toEqual(['processamento', 'carregamento', 'erros-pagina']);
   });
 
   it('guarda apenas a seleção', async () => {

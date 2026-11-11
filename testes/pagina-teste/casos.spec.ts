@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { CICLOS, aquecer, ciclosAbrirFechar, contadoresAposGc } from './apoio.ts';
 
-test('o índice lista os quatro casos', async ({ page }) => {
+test('o índice lista os cinco casos', async ({ page }) => {
   const resposta = await page.goto('/');
   expect(resposta?.status()).toBe(200);
-  for (const caso of ['limpa', 'vazamento-listener', 'vazamento-dom', 'cpu-pesada']) {
+  for (const caso of ['limpa', 'vazamento-listener', 'vazamento-dom', 'cpu-pesada', 'erros']) {
     await expect(page.getByTestId(`caso-${caso}`)).toHaveAttribute('href', `/${caso}`);
   }
 });

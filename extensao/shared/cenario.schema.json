@@ -1,0 +1,740 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sondagem.invalid/cenario.schema.json",
+  "title": "Cenário da Sondagem (versão 1)",
+  "type": "object",
+  "required": [
+    "versao_esquema",
+    "nome",
+    "url_inicial",
+    "passos"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "versao_esquema": {
+      "const": 1
+    },
+    "nome": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "descricao": {
+      "type": "string"
+    },
+    "url_inicial": {
+      "type": "string",
+      "pattern": "^https?://\\S+$"
+    },
+    "execucao": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "iteracoes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Padrão: 5. Pode ser sobrescrito na confirmação."
+        },
+        "throttling": {
+          "type": [
+            "string",
+            "object"
+          ],
+          "pattern": "\\S",
+          "additionalProperties": false,
+          "description": "Nome de um perfil (ex.: \"padrao\") ou valores personalizados. Registrado no resultado; aplicado a partir da fase 5.",
+          "properties": {
+            "cpu": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Fator de desaceleração da CPU."
+            },
+            "rede": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "latencia_ms": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "download_kbps": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "upload_kbps": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "aquecimento": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/passo_de_acao"
+      },
+      "description": "Executado uma vez antes dos passos, sem medições."
+    },
+    "sessao": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url_login": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "limpar_storage": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "cookies",
+          "local_storage",
+          "session_storage",
+          "indexeddb",
+          "cache_storage"
+        ]
+      }
+    },
+    "passos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/passo"
+      }
+    }
+  },
+  "$defs": {
+    "passo": {
+      "type": "object",
+      "required": [
+        "tipo"
+      ],
+      "properties": {
+        "tipo": {
+          "enum": [
+            "navegar",
+            "clicar",
+            "digitar",
+            "esperar",
+            "rolar",
+            "aguardar_inatividade",
+            "repetir",
+            "medir",
+            "snapshot",
+            "forcar_gc"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "navegar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/navegar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "clicar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/clicar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "digitar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/digitar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "esperar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/esperar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "rolar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/rolar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "aguardar_inatividade"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/aguardar_inatividade"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "repetir"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/repetir"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "medir"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/medir"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "snapshot"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/snapshot"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "forcar_gc"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/forcar_gc"
+          }
+        }
+      ]
+    },
+    "passo_de_acao": {
+      "type": "object",
+      "required": [
+        "tipo"
+      ],
+      "properties": {
+        "tipo": {
+          "enum": [
+            "navegar",
+            "clicar",
+            "digitar",
+            "esperar",
+            "rolar",
+            "aguardar_inatividade"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "navegar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/navegar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "clicar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/clicar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "digitar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/digitar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "esperar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/esperar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "rolar"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/rolar"
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tipo": {
+                "const": "aguardar_inatividade"
+              }
+            },
+            "required": [
+              "tipo"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/aguardar_inatividade"
+          }
+        }
+      ]
+    },
+    "navegar": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "navegar"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "URL absoluta ou relativa à url_inicial."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "clicar": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "clicar"
+        },
+        "seletor": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Seletor CSS do elemento. Prefira atributos estáveis, como data-testid."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [
+        "seletor"
+      ],
+      "additionalProperties": false
+    },
+    "digitar": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "digitar"
+        },
+        "seletor": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Seletor CSS do elemento. Prefira atributos estáveis, como data-testid."
+        },
+        "texto": {
+          "type": "string"
+        },
+        "limpar": {
+          "type": "boolean",
+          "description": "Substitui o conteúdo atual do campo em vez de acrescentar."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [
+        "seletor",
+        "texto"
+      ],
+      "additionalProperties": false
+    },
+    "esperar": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "esperar"
+        },
+        "ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seletor": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Seletor CSS do elemento. Prefira atributos estáveis, como data-testid."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ms"
+          ]
+        },
+        {
+          "required": [
+            "seletor"
+          ]
+        }
+      ]
+    },
+    "rolar": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "rolar"
+        },
+        "seletor": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Seletor CSS do elemento. Prefira atributos estáveis, como data-testid."
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "x"
+          ]
+        },
+        {
+          "required": [
+            "y"
+          ]
+        }
+      ]
+    },
+    "aguardar_inatividade": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "aguardar_inatividade"
+        },
+        "ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tempo sem rede nem long tasks. Padrão: 500."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "repetir": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "repetir"
+        },
+        "vezes": {
+          "description": "Inteiro maior que zero ou a referência \"iteracoes\"."
+        },
+        "passos": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/passo"
+          }
+        }
+      },
+      "required": [
+        "vezes",
+        "passos"
+      ],
+      "additionalProperties": false
+    },
+    "medir": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "medir"
+        },
+        "metricas": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "heap_usado",
+              "nos_dom",
+              "listeners"
+            ]
+          }
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [
+        "metricas"
+      ],
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "snapshot"
+        },
+        "rotulo": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Único entre os snapshots do cenário."
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [
+        "rotulo"
+      ],
+      "additionalProperties": false
+    },
+    "forcar_gc": {
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "const": "forcar_gc"
+        },
+        "tempo_limite_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tempo limite do passo em milissegundos. Padrão: 10000."
+        },
+        "em_erro": {
+          "enum": [
+            "interromper",
+            "pular",
+            "repetir"
+          ],
+          "description": "O que fazer se o passo falhar. Padrão: interromper."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}

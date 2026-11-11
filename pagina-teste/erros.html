@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Erros da página · Página de teste</title>
+    <link rel="stylesheet" href="/estilo.css" />
+    <script type="module" src="/erros.ts"></script>
+  </head>
+  <body>
+    <p><a href="/" data-testid="voltar-indice">← Casos</a></p>
+    <h1>Erros da página</h1>
+    <p>Cada botão produz um erro não tratado. A página continua funcionando depois deles.</p>
+    <button type="button" data-testid="lancar-excecao">Lançar exceção</button>
+    <button type="button" data-testid="rejeitar-promise">Rejeitar promise</button>
+    <p>Erros produzidos: <output data-testid="contador-erros">0</output></p>
+  </body>
+</html>

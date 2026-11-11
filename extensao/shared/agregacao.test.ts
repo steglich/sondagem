@@ -28,6 +28,21 @@ describe('aplicarLote', () => {
     expect(dados.interacoes).toEqual([{ ...base, tipo: 'click', duracao: 320 }]);
   });
 
+  it('ao unir lotes, o alvo conhecido não se perde para um registro sem alvo', () => {
+    const base = { id: 7, documento: 'doc-1', inicio: 1100 };
+    const semAlvo = '(elemento removido)';
+
+    const depois = dadosVazios();
+    aplicarLote(depois, lote({ interacoes: [{ ...base, tipo: 'pointerdown', duracao: 304, alvo: semAlvo }] }));
+    aplicarLote(depois, lote({ interacoes: [{ ...base, tipo: 'click', duracao: 304, alvo: 'button' }] }));
+    expect(depois.interacoes).toEqual([{ ...base, tipo: 'pointerdown', duracao: 304, alvo: 'button' }]);
+
+    const antes = dadosVazios();
+    aplicarLote(antes, lote({ interacoes: [{ ...base, tipo: 'pointerdown', duracao: 48, alvo: 'button' }] }));
+    aplicarLote(antes, lote({ interacoes: [{ ...base, tipo: 'click', duracao: 320, alvo: semAlvo }] }));
+    expect(antes.interacoes).toEqual([{ ...base, tipo: 'click', duracao: 320, alvo: 'button' }]);
+  });
+
   it('mantém as métricas por documento e atualiza só as que mudaram', () => {
     const dados = dadosVazios();
     aplicarLote(dados, lote({ metricas: { FCP: 120, LCP: 150 } }));
@@ -41,10 +56,10 @@ describe('aplicarLote', () => {
 describe('resumir', () => {
   it('conta os registros e aponta a pior long task', () => {
     const dados = dadosVazios();
-    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0 });
+    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0, errosPagina: 0 });
 
     aplicarLote(dados, lote({ longTasks: [{ inicio: 1, duracao: 60 }, { inicio: 2, duracao: 310 }] }));
-    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1 });
+    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1, errosPagina: 0 });
   });
 });
 

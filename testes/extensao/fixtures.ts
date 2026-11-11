@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { type BrowserContext, type Page, type Worker, test as base, chromium } from '@playwright/test';
 
 const PASTA_EXTENSAO = resolve('dist/extensao');
+export const CHAVE_IGNORAR_DEPURADOR = 'sondagem:teste:ignorar-depurador-anexado';
 
 interface Fixtures {
   context: BrowserContext;
@@ -26,7 +27,12 @@ export const test = base.extend<Fixtures>({
   },
   serviceWorker: async ({ context }, use) => {
     const [existente] = context.serviceWorkers();
-    await use(existente ?? (await context.waitForEvent('serviceworker')));
+    const serviceWorker = existente ?? (await context.waitForEvent('serviceworker'));
+    // O Playwright é um cliente de depuração de toda página que controla. Sem esta
+    // chave, a extensão veria "outro depurador na aba" e recusaria qualquer análise
+    // que use o debugger. O teste do bloqueio remove a chave.
+    await serviceWorker.evaluate((chave) => chrome.storage.local.set({ [chave]: true }), CHAVE_IGNORAR_DEPURADOR);
+    await use(serviceWorker);
   },
   idExtensao: async ({ serviceWorker }, use) => {
     await use(new URL(serviceWorker.url()).host);

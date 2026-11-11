@@ -12,10 +12,44 @@ import {
   type MensagemDaPagina,
   NOME_PORTA_PAGINA,
 } from '../shared/types.ts';
+import { type TransporteCdp, criarConexaoCdp } from './cdp.ts';
 import { criarOrquestrador } from './sessao.ts';
 
 const CHAVE_ESTADO = 'sondagem:sessao';
 const ARQUIVO_INJETADO = 'injected.js';
+/**
+ * Só para os testes de integração: o Playwright é um cliente de depuração de toda
+ * página que controla, e sem esta chave a consulta prévia bloquearia toda análise
+ * com debugger. Não tem interface; ver o design da fase 2.
+ */
+const CHAVE_IGNORAR_DEPURADOR = 'sondagem:teste:ignorar-depurador-anexado';
+
+/** Único ponto que toca `chrome.debugger`. */
+const transporteCdp: TransporteCdp = {
+  async alvoJaDepurado(idAba) {
+    const itens = await chrome.storage.local.get(CHAVE_IGNORAR_DEPURADOR);
+    if (itens[CHAVE_IGNORAR_DEPURADOR] === true) return false;
+    const alvos = await chrome.debugger.getTargets();
+    return alvos.some((alvo) => alvo.tabId === idAba && alvo.attached);
+  },
+  anexar: (idAba, versao) => chrome.debugger.attach({ tabId: idAba }, versao),
+  desanexar: (idAba) => chrome.debugger.detach({ tabId: idAba }),
+  enviar: (idAba, metodo, parametros) => chrome.debugger.sendCommand({ tabId: idAba }, metodo, parametros),
+  aoEvento(ouvinte) {
+    const receber = (origem: chrome.debugger.Debuggee, metodo: string, parametros?: object): void => {
+      if (origem.tabId !== undefined) ouvinte(origem.tabId, metodo, parametros);
+    };
+    chrome.debugger.onEvent.addListener(receber);
+    return () => chrome.debugger.onEvent.removeListener(receber);
+  },
+  aoDesanexar(ouvinte) {
+    const receber = (origem: chrome.debugger.Debuggee, motivo: string): void => {
+      if (origem.tabId !== undefined) ouvinte(origem.tabId, motivo);
+    };
+    chrome.debugger.onDetach.addListener(receber);
+    return () => chrome.debugger.onDetach.removeListener(receber);
+  },
+};
 
 const orquestrador = criarOrquestrador({
   async lerEstado() {
@@ -30,12 +64,12 @@ const orquestrador = criarOrquestrador({
       return null;
     }
   },
-  registrarScript: (id, padrao) =>
+  registrarScript: (id, padroes) =>
     chrome.scripting.registerContentScripts([
       {
         id,
         js: [ARQUIVO_INJETADO],
-        matches: [padrao],
+        matches: padroes,
         runAt: 'document_start',
         world: 'ISOLATED',
         // Reiniciar o navegador nunca pode trazer o script de volta.
@@ -57,6 +91,15 @@ const orquestrador = criarOrquestrador({
     chrome.runtime.sendMessage(evento).catch(() => undefined);
   },
   agora: Date.now,
+  criarCdp: () => criarConexaoCdp(transporteCdp),
+  async soltarDepurador(idAba) {
+    try {
+      await chrome.debugger.detach({ tabId: idAba });
+      return true;
+    } catch {
+      return false;
+    }
+  },
 });
 
 // Ao acordar (instalação, início do navegador ou depois de suspenso), confere o estado gravado.

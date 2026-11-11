@@ -1,6 +1,6 @@
 // Servidor estático da página de teste, em http://localhost:4300.
 //
-// Cada caso é uma rota (/limpa, /vazamento-listener, /vazamento-dom, /cpu-pesada)
+// Cada caso é uma rota (/limpa, /vazamento-listener, /vazamento-dom, /cpu-pesada, /erros)
 // servida a partir de pagina-teste/<caso>.html. Arquivos .ts são convertidos para
 // JavaScript na hora, sem minificação, para que os nomes de função (como
 // calculoPesado) apareçam como escritos nos perfis de CPU.

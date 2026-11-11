@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const PAGINAS = ['/', '/limpa', '/vazamento-listener', '/vazamento-dom', '/cpu-pesada'];
+const PAGINAS = ['/', '/limpa', '/vazamento-listener', '/vazamento-dom', '/cpu-pesada', '/erros'];
 const INTERATIVOS = 'a[href], button, input, select, textarea, [role="button"], [tabindex]:not([tabindex="-1"])';
 
 for (const caminho of PAGINAS) {

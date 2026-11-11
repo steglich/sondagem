@@ -19,11 +19,24 @@ export const VERIFICACOES: readonly Verificacao[] = [
     exige: 'pagina',
     coleta: ['metricas-carregamento'],
   },
+  {
+    id: 'erros-pagina',
+    nome: 'Erros da página',
+    descricao: 'Exceções JavaScript e promises rejeitadas (usa o debugger)',
+    exige: 'debugger',
+    // Coletada pelo service worker via CDP: nada é instalado na página.
+    coleta: [],
+  },
 ];
 
-/** Seleção usada quando ainda não há uma escolha salva: tudo marcado. */
-export function selecaoPadrao(): Selecao {
-  return VERIFICACOES.map((v) => v.id);
+/**
+ * Seleção usada quando ainda não há uma escolha salva. Na sessão manual ficam
+ * marcadas só as verificações que não exigem o debugger, para que a análise não
+ * abra a barra de depuração sem o usuário pedir. Em cenários o debugger já é
+ * anexado para executar os passos, então tudo vem marcado.
+ */
+export function selecaoPadrao(comDebugger = false): Selecao {
+  return VERIFICACOES.filter((v) => comDebugger || v.exige === 'pagina').map((v) => v.id);
 }
 
 /** Descarta o que não é verificação conhecida, remove repetições e ordena como o registro. */
@@ -40,4 +53,9 @@ export function coletoresDaSelecao(selecao: readonly IdVerificacao[]): Coletor[]
     if (selecao.includes(verificacao.id)) verificacao.coleta.forEach((c) => coletores.add(c));
   }
   return [...coletores];
+}
+
+/** Verificações da seleção que só rodam com o debugger anexado à aba. */
+export function verificacoesComDebugger(selecao: readonly IdVerificacao[]): Verificacao[] {
+  return VERIFICACOES.filter((v) => v.exige === 'debugger' && selecao.includes(v.id));
 }

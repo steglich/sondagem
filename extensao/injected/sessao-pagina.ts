@@ -27,7 +27,8 @@ export interface AmbientePagina {
  *
  * 1. Abre a porta e espera `configurar`. Sem essa mensagem (não há sessão para
  *    esta aba), nada é instalado.
- * 2. Com `configurar`, instala os observadores da seleção e envia um lote por segundo.
+ * 2. Com `configurar`, instala os observadores da seleção e envia um lote por segundo
+ *    (e um a mais a cada `marcar`, nos limites das iterações de um cenário).
  * 3. Com `encerrar`, desliga tudo e responde `encerrado` com o último lote e a
  *    contagem do que foi desconectado.
  *
@@ -79,6 +80,9 @@ export function iniciarNaPagina(ambiente: AmbientePagina): void {
           enviar: (lote) => porta?.postMessage({ tipo: 'lote', lote }),
           intervaloMs: ambiente.intervaloMs,
         });
+      } else if (mensagem.tipo === 'marcar') {
+        // Início ou fim de iteração: o que foi acumulado segue já, sem esperar o próximo lote.
+        if (instalacao) estaPorta.postMessage({ tipo: 'lote', lote: instalacao.drenar() });
       } else if (mensagem.tipo === 'encerrar') {
         const { lote, desconectados } = desligar();
         if (lote) estaPorta.postMessage({ tipo: 'encerrado', lote, desconectados });

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EstadoSessao, Lote, MensagemDaPagina, MensagemParaPagina, VisaoSessao } from '../shared/types.ts';
+import { criarTransporteFalso } from './apoio-teste.ts';
+import { criarConexaoCdp } from './cdp.ts';
 import { type AmbienteSessao, ESPERA_ENCERRAMENTO_MS, type PortaDaPagina, criarOrquestrador } from './sessao.ts';
 
 const URL_TESTE = 'http://localhost:4300/cpu-pesada';
@@ -13,6 +15,7 @@ function criarAmbiente(gravado?: EstadoSessao) {
   const publicadas: VisaoSessao[] = [];
   const injetadas: number[] = [];
   let estadoGravado = gravado;
+  const transporte = criarTransporteFalso();
   const ambiente: AmbienteSessao = {
     lerEstado: async () => structuredClone(estadoGravado),
     gravarEstado: async (estado) => void (estadoGravado = structuredClone(estado)),
@@ -26,8 +29,10 @@ function criarAmbiente(gravado?: EstadoSessao) {
     injetar: async (idAba) => void injetadas.push(idAba),
     publicar: (visao) => void publicadas.push(structuredClone(visao)),
     agora: () => Date.now(),
+    criarCdp: () => criarConexaoCdp(transporte),
+    soltarDepurador: async (idAba) => transporte.anexadas.delete(idAba),
   };
-  return { ambiente, abas, scripts, publicadas, injetadas, gravado: () => estadoGravado };
+  return { ambiente, abas, scripts, publicadas, injetadas, transporte, gravado: () => estadoGravado };
 }
 
 interface PortaSimulada extends PortaDaPagina {
@@ -189,7 +194,13 @@ describe('orquestração da sessão', () => {
       await vi.advanceTimersByTimeAsync(1000);
 
       expect(publicadas.length).toBeLessThanOrEqual(2);
-      expect(publicadas.at(-1)?.status).toEqual({ longTasks: 50, interacoes: 0, piorLongTask: 109, carregamentos: 1 });
+      expect(publicadas.at(-1)?.status).toEqual({
+        longTasks: 50,
+        interacoes: 0,
+        piorLongTask: 109,
+        carregamentos: 1,
+        errosPagina: 0,
+      });
       expect(gravado()?.sessao?.dados.longTasks).toHaveLength(50);
     });
 

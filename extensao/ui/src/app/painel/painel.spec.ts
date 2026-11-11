@@ -1,6 +1,14 @@
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PonteSimulada, RESULTADO_FIXO, URL_TESTE, VISAO_OCIOSA, visaoAtiva } from '../sessao/apoio-teste';
+import {
+  CENARIO_TESTE,
+  PonteSimulada,
+  RESULTADO_CENARIO_FIXO,
+  RESULTADO_FIXO,
+  URL_TESTE,
+  VISAO_OCIOSA,
+  visaoAtiva,
+} from '../sessao/apoio-teste';
 import { PonteExtensao } from '../sessao/ponte';
 import { Painel } from './painel';
 
@@ -233,6 +241,150 @@ describe('Painel', () => {
       fixture.detectChanges();
 
       expect(porId('resultado-desfecho').textContent).toContain('Interrompida');
+    });
+  });
+
+  describe('cenário', () => {
+    beforeEach(() => {
+      ponte.cenarios.set(CENARIO_TESTE.nome, CENARIO_TESTE);
+      ponte.cenarioSelecionado = CENARIO_TESTE.nome;
+    });
+
+    it('o painel ocioso mostra a tela de cenários', async () => {
+      await abrir();
+      // A lista é lida do armazenamento pelo próprio componente, depois de montado.
+      await assentar();
+      expect(existe('lista-cenarios')).toBe(true);
+      expect(porId<HTMLInputElement>('selecionar-cenario-abrir-fechar').checked).toBe(true);
+    });
+
+    it('"Analisar" com um cenário escolhido abre a confirmação no modo cenário, ainda sem iniciar', async () => {
+      await abrir();
+      await clicar('analisar');
+
+      expect(porId('confirmacao-modo').textContent).toContain('Cenário');
+      expect(porId('confirmacao-cenario').textContent).toContain('abrir-fechar');
+      expect(porId<HTMLInputElement>('confirmacao-iteracoes').value).toBe('20');
+      // Em cenário o debugger já é usado, então tudo vem marcado.
+      expect(porId<HTMLInputElement>('verificacao-erros-pagina').checked).toBe(true);
+      expect(ponte.comandos.some((c) => c.tipo === 'iniciar')).toBe(false);
+    });
+
+    it('confirmar envia o cenário, as iterações informadas e a versão do build', async () => {
+      await abrir();
+      await clicar('analisar');
+      const iteracoes = porId<HTMLInputElement>('confirmacao-iteracoes');
+      iteracoes.value = '10';
+      iteracoes.dispatchEvent(new Event('input'));
+      await assentar();
+      await clicar('verificacao-carregamento');
+      await clicar('confirmar');
+
+      expect(ponte.comandos.at(-1)).toEqual({
+        tipo: 'iniciar',
+        idAba: 5,
+        selecao: ['processamento', 'erros-pagina'],
+        cenario: { definicao: CENARIO_TESTE, iteracoes: 10, versaoBuild: null },
+      });
+      expect(porId('execucao-cenario').textContent).toBe('abrir-fechar');
+      expect(existe('parar')).toBe(false);
+      expect(existe('cancelar')).toBe(true);
+    });
+
+    it('a seleção é lembrada por cenário, separada da sessão manual', async () => {
+      await abrir();
+      await clicar('analisar');
+      await clicar('verificacao-carregamento');
+      await clicar('confirmar');
+      await clicar('cancelar');
+
+      expect(ponte.selecoes.get('cenario:abrir-fechar')).toEqual(['processamento', 'erros-pagina']);
+      expect(ponte.selecoes.has('manual')).toBe(false);
+
+      await clicar('analisar');
+      expect(porId<HTMLInputElement>('verificacao-carregamento').checked).toBe(false);
+      await clicar('modo-manual');
+      expect(porId<HTMLInputElement>('verificacao-carregamento').checked).toBe(true);
+      expect(porId<HTMLInputElement>('verificacao-erros-pagina').checked).toBe(false);
+    });
+
+    it('trocar para sessão manual na confirmação inicia sem cenário', async () => {
+      await abrir();
+      await clicar('analisar');
+      await clicar('modo-manual');
+      await clicar('confirmar');
+
+      expect(ponte.comandos.at(-1)).toEqual({ tipo: 'iniciar', idAba: 5, selecao: ['processamento', 'carregamento'] });
+      expect(existe('parar')).toBe(true);
+    });
+
+    it('mostra o estado e o progresso publicados pelo service worker', async () => {
+      await abrir();
+      await clicar('analisar');
+      await clicar('confirmar');
+
+      ponte.publicar({
+        ...visaoAtiva(),
+        execucao: { nome: 'abrir-fechar', estado: 'executando', iteracao: 7, totalIteracoes: 20 },
+      });
+      fixture.detectChanges();
+
+      expect(porId('execucao-estado').textContent).toBe('Executando');
+      expect(porId('execucao-progresso').textContent).toBe('iteração 7 de 20');
+    });
+
+    it('ao final mostra o resumo da execução', async () => {
+      await abrir();
+      await clicar('analisar');
+      await clicar('confirmar');
+      ponte.publicar({ ...VISAO_OCIOSA, resultado: RESULTADO_CENARIO_FIXO });
+      fixture.detectChanges();
+
+      expect(porId('resultado-tipo').textContent).toContain('Cenário');
+      expect(porId('cenario-iteracoes').textContent).toContain('19 de 20');
+      expect(existe('estatisticas')).toBe(true);
+      expect(porId('erros-pagina-destaque').textContent).toContain('2 erros');
+    });
+  });
+
+  describe('falha ao anexar o debugger', () => {
+    it('mostra a orientação e o que depende do debugger, e nenhuma análise começa', async () => {
+      ponte.cenarios.set(CENARIO_TESTE.nome, CENARIO_TESTE);
+      ponte.cenarioSelecionado = CENARIO_TESTE.nome;
+      ponte.recusaAoIniciar = {
+        ok: false,
+        motivo: 'debugger',
+        mensagem: 'Há um depurador aberto nesta aba.',
+        visao: VISAO_OCIOSA,
+        falhaDebugger: { categoria: 'outro-depurador', original: '', dependentes: ['Execução do cenário', 'Erros da página'] },
+      };
+      await abrir();
+      await clicar('analisar');
+      await clicar('confirmar');
+
+      expect(porId('falha-debugger-titulo').textContent).toContain('Há um depurador aberto nesta aba.');
+      expect(porId('falha-debugger').textContent).toContain('Execução do cenário');
+      expect(porId('falha-debugger').textContent).toContain('Erros da página');
+      expect(existe('erro')).toBe(false);
+      expect(existe('cancelar')).toBe(false);
+      expect(existe('analisar')).toBe(true);
+    });
+
+    it('a mensagem some ao tentar de novo', async () => {
+      ponte.recusaAoIniciar = {
+        ok: false,
+        motivo: 'debugger',
+        mensagem: 'x',
+        visao: VISAO_OCIOSA,
+        falhaDebugger: { categoria: 'alvo-nao-depuravel', original: 'Cannot access a chrome:// URL', dependentes: ['Erros da página'] },
+      };
+      await abrir();
+      await clicar('analisar');
+      await clicar('confirmar');
+      expect(existe('falha-debugger')).toBe(true);
+
+      await clicar('analisar');
+      expect(existe('falha-debugger')).toBe(false);
     });
   });
 

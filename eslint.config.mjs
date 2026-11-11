@@ -22,7 +22,7 @@ const isolamentoDaInterface = {
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'extensao/ui/.angular/**', 'test-results/**', 'playwright-report/**'],
+    ignores: ['extensao/shared/gerado/**', 'dist/**', 'node_modules/**', 'extensao/ui/.angular/**', 'test-results/**', 'playwright-report/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

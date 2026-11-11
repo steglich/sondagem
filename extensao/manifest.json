@@ -4,7 +4,7 @@
   "description": "Testa a performance de páginas web em desenvolvimento: vazamentos de memória e problemas de processamento.",
   "version": "0.0.0",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "storage", "scripting", "tabs"],
+  "permissions": ["sidePanel", "storage", "scripting", "tabs", "debugger"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service-worker.js",
