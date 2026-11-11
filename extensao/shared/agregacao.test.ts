@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest';
+import { aplicarLote, dadosVazios, inpDaAnalise, metricasDeCarregamento, resumir } from './agregacao.ts';
+import type { Lote } from './types.ts';
+
+const documento = { id: 'doc-1', url: 'http://localhost:4300/cpu-pesada', inicio: 1000 };
+
+function lote(parcial: Partial<Lote> = {}): Lote {
+  return { documento, longTasks: [], interacoes: [], metricas: {}, ...parcial };
+}
+
+describe('aplicarLote', () => {
+  it('acumula long tasks e registra o documento', () => {
+    const dados = dadosVazios();
+    aplicarLote(dados, lote({ longTasks: [{ inicio: 1100, duracao: 300 }] }));
+    aplicarLote(dados, lote({ longTasks: [{ inicio: 2100, duracao: 80 }] }));
+
+    expect(dados.longTasks).toHaveLength(2);
+    expect(dados.documentos).toEqual([{ ...documento, metricas: {} }]);
+  });
+
+  it('une a mesma interação recebida em dois lotes, ficando com a mais demorada', () => {
+    const dados = dadosVazios();
+    const base = { id: 7, documento: 'doc-1', inicio: 1100, alvo: 'button' };
+    aplicarLote(dados, lote({ interacoes: [{ ...base, tipo: 'pointerdown', duracao: 48 }] }));
+    aplicarLote(dados, lote({ interacoes: [{ ...base, tipo: 'click', duracao: 320 }] }));
+    aplicarLote(dados, lote({ interacoes: [{ ...base, tipo: 'pointerup', duracao: 56 }] }));
+
+    expect(dados.interacoes).toEqual([{ ...base, tipo: 'click', duracao: 320 }]);
+  });
+
+  it('mantém as métricas por documento e atualiza só as que mudaram', () => {
+    const dados = dadosVazios();
+    aplicarLote(dados, lote({ metricas: { FCP: 120, LCP: 150 } }));
+    aplicarLote(dados, lote({ metricas: { LCP: 400 } }));
+    aplicarLote(dados, lote({ documento: { ...documento, id: 'doc-2' }, metricas: { FCP: 90 } }));
+
+    expect(dados.documentos.map((d) => d.metricas)).toEqual([{ FCP: 120, LCP: 400 }, { FCP: 90 }]);
+  });
+});
+
+describe('resumir', () => {
+  it('conta os registros e aponta a pior long task', () => {
+    const dados = dadosVazios();
+    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0 });
+
+    aplicarLote(dados, lote({ longTasks: [{ inicio: 1, duracao: 60 }, { inicio: 2, duracao: 310 }] }));
+    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1 });
+  });
+});
+
+describe('métricas', () => {
+  it('métrica ausente aparece como indisponível (null), e zero continua sendo zero', () => {
+    expect(metricasDeCarregamento({ FCP: 120, CLS: 0 })).toEqual({ lcp: null, cls: 0, fcp: 120, ttfb: null });
+  });
+
+  it('o INP da análise é o pior entre os documentos, ou indisponível', () => {
+    const dados = dadosVazios();
+    expect(inpDaAnalise(dados)).toBeNull();
+    aplicarLote(dados, lote({ metricas: { INP: 80 } }));
+    aplicarLote(dados, lote({ documento: { ...documento, id: 'doc-2' }, metricas: { INP: 320 } }));
+    expect(inpDaAnalise(dados)).toBe(320);
+  });
+});

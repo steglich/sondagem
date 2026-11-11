@@ -38,7 +38,7 @@ const bundles = [
   },
   {
     ...comum,
-    entryPoints: [join(raiz, 'extensao', 'injected', 'observers.ts')],
+    entryPoints: [join(raiz, 'extensao', 'injected', 'entrada.ts')],
     outfile: join(saida, 'injected.js'),
     format: 'iife',
   },
