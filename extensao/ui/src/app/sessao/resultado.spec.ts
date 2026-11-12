@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { dadosVazios } from '../../../../shared/agregacao';
 import { describe, expect, it } from 'vitest';
 import type { ResultadoSessao } from '../../../../shared/types';
-import { RESULTADO_CENARIO_FIXO, RESULTADO_FIXO, RESULTADO_MEMORIA_FIXO } from './apoio-teste';
+import { RESULTADO_CENARIO_FIXO, RESULTADO_CPU_FIXO, RESULTADO_FIXO, RESULTADO_MEMORIA_FIXO } from './apoio-teste';
 import { Resultado } from './resultado';
 
 function montar(resultado: ResultadoSessao) {
@@ -334,6 +334,100 @@ describe('Resultado', () => {
       expect(existe('resultado-interrompida')).toBe(false);
       // Os dados já coletados continuam no resultado.
       expect(existe('estatisticas')).toBe(true);
+    });
+  });
+
+  describe('CPU', () => {
+    const comCpu = (cpu: Partial<NonNullable<ResultadoSessao['dados']['cpu']>>): ResultadoSessao => ({
+      ...RESULTADO_CPU_FIXO,
+      dados: { ...RESULTADO_CPU_FIXO.dados, cpu: { ...RESULTADO_CPU_FIXO.dados.cpu!, ...cpu } },
+    });
+
+    it('sem a verificação "CPU" não há seção de CPU nem aviso de perfil ligado', () => {
+      const { existe } = montar(RESULTADO_FIXO);
+      expect(existe('cpu-categorias')).toBe(false);
+      expect(existe('cpu-funcoes')).toBe(false);
+      expect(existe('resultado-perfil-cpu')).toBe(false);
+    });
+
+    it('mostra as categorias do motor separadas das funções', () => {
+      const { texto } = montar(RESULTADO_CPU_FIXO);
+      expect(texto('cpu-amostrado')).toBe('2000.0 ms');
+      expect(texto('cpu-ativo')).toBe('500.0 ms (25.0%)');
+      expect(texto('cpu-ocioso')).toBe('1500.0 ms (75.0%)');
+      expect(texto('cpu-coleta-de-lixo')).toBe('20.0 ms (1.0%)');
+      expect(texto('cpu-programa')).toBe('50.0 ms (2.5%)');
+      expect(texto('cpu-extensoes')).toBe('10.0 ms (0.5%)');
+    });
+
+    it('lista as 30 primeiras funções com nome, origem, tempo próprio, tempo total e percentual', () => {
+      const { textos, texto } = montar(RESULTADO_CPU_FIXO);
+      const linhas = textos('cpu-funcao');
+      expect(linhas).toHaveLength(30);
+      // Na primeira coluna, o nome e a origem ficam em elementos seguidos.
+      expect(texto('cpu-funcao-nome')).toBe('calculoPesado');
+      expect(texto('cpu-funcao-origem')).toBe('http://localhost:4300/cpu-pesada.ts:4');
+      expect(linhas.slice(0, 3)).toEqual([
+        'calculoPesadohttp://localhost:4300/cpu-pesada.ts:4 300.0 ms 310.5 ms 60.0%',
+        '(anônima)http://localhost:4300/cpu-pesada.ts:15 40.0 ms 350.5 ms 8.0%',
+        'sortorigem não informada 12.3 ms 12.3 ms 2.5%',
+      ]);
+      expect(linhas.at(-1)).toBe('auxiliar27http://localhost:4300/comum.ts:27 1.0 ms 1.0 ms 0.2%');
+    });
+
+    it('soma em "outras" o que ficou fora da lista: as funções além das 30 e o resto do resumo', () => {
+      const { textos } = montar(RESULTADO_CPU_FIXO);
+      // 5 funções de 1 ms além das 30, mais 12 funções (3 ms) já agregadas no resumo: 8 ms de 500 ms.
+      expect(textos('cpu-outras')).toEqual(['Outras (17 funções) 8.0 ms — 1.6%']);
+    });
+
+    it('sem nada fora da lista, a linha "outras" não aparece', () => {
+      const resumo = RESULTADO_CPU_FIXO.dados.cpu!.resumo!;
+      const { existe, textos } = montar(comCpu({ resumo: { ...resumo, funcoes: resumo.funcoes.slice(0, 2), outras: null } }));
+      expect(textos('cpu-funcao')).toHaveLength(2);
+      expect(existe('cpu-outras')).toBe(false);
+    });
+
+    it('página só ociosa: categorias sem lista de funções', () => {
+      const resumo = RESULTADO_CPU_FIXO.dados.cpu!.resumo!;
+      const { existe, texto } = montar(comCpu({ resumo: { ...resumo, funcoes: [], outras: null } }));
+      expect(texto('cpu-ocioso')).toBe('1500.0 ms (75.0%)');
+      expect(existe('cpu-funcoes')).toBe(false);
+      expect(texto('cpu-sem-funcoes')).toContain('Nenhuma função');
+    });
+
+    it('avisa que as métricas foram coletadas com o perfil de CPU ligado', () => {
+      const { texto, existe } = montar(RESULTADO_CPU_FIXO);
+      expect(texto('resultado-perfil-cpu')).toContain('coletadas com o perfil de CPU ligado');
+      expect(existe('cpu-limite')).toBe(false);
+      expect(existe('cpu-incompleto')).toBe(false);
+      expect(existe('cpu-falha')).toBe(false);
+    });
+
+    it('avisa quando o perfil parou no limite de duração da sessão manual', () => {
+      const { texto, existe } = montar(comCpu({ limiteAtingido: true }));
+      expect(texto('cpu-limite')).toContain('limite de 5 minutos');
+      expect(existe('cpu-funcoes')).toBe(true);
+    });
+
+    it('avisa quando o perfil veio incompleto, mantendo o resumo', () => {
+      const { texto, existe } = montar(comCpu({ incompleto: true }));
+      expect(texto('cpu-incompleto')).toContain('incompleto');
+      expect(existe('cpu-funcoes')).toBe(true);
+    });
+
+    it('perfil não coletado: mostra o motivo, sem resumo e sem o aviso de perfil ligado', () => {
+      const falha = 'O perfil de CPU não foi coletado: o navegador já tem um trace em andamento.';
+      const { texto, existe } = montar(comCpu({ estado: 'falhou', ativo: false, resumo: null, falha }));
+      expect(texto('cpu-falha')).toBe(falha);
+      expect(existe('cpu-categorias')).toBe(false);
+      expect(existe('resultado-perfil-cpu')).toBe(false);
+    });
+
+    it('análise cancelada não mostra a seção de CPU', () => {
+      const { existe } = montar({ ...RESULTADO_CPU_FIXO, desfecho: 'cancelada' });
+      expect(existe('cpu-categorias')).toBe(false);
+      expect(existe('resultado-perfil-cpu')).toBe(false);
     });
   });
 });

@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { inpDaAnalise, metricasDeCarregamento } from '../../../../shared/agregacao';
 import { descreverThrottling } from '../../../../shared/cenario';
+import { FUNCOES_EXIBIDAS, LIMITE_PERFIL_MANUAL_MS } from '../../../../shared/cpu';
 import { explicarDesconexao } from '../../../../shared/mensagens-debugger';
 import { CONSTRUTORES_EXIBIDOS, LIMITES_PADRAO } from '../../../../shared/memoria';
 import { formatarBytes, formatarMs, formatarVariacaoBytes } from '../../../../shared/texto';
@@ -80,6 +81,13 @@ const INDISPONIVEL = 'indisponível';
             A sessão foi interrompida (aba fechada ou extensão suspensa). Os dados recebidos até então foram mantidos.
           </p>
         }
+      }
+
+      @if (perfilCpuAtivo()) {
+        <p class="aviso" data-testid="resultado-perfil-cpu">
+          As métricas desta análise foram coletadas com o perfil de CPU ligado, que deixa a página mais lenta. Para tempos sem
+          esse custo, rode de novo sem a verificação “CPU”.
+        </p>
       }
 
       @if (resultado().cenario; as c) {
@@ -302,6 +310,79 @@ const INDISPONIVEL = 'indisponível';
           <p class="nota" data-testid="memoria-sem-dados">
             Nenhuma medição de memória foi feita: o cenário não tem passos medir ou snapshot.
           </p>
+        }
+      }
+
+      @if (cpu(); as c) {
+        <h3>CPU</h3>
+        @if (c.falha) {
+          <p class="aviso" data-testid="cpu-falha">{{ c.falha }}</p>
+        }
+        @if (c.limiteAtingido) {
+          <p class="aviso" data-testid="cpu-limite">
+            O perfil de CPU parou ao atingir o limite de {{ limitePerfil }}: o resumo cobre só esse período. As outras
+            verificações continuaram até o fim da sessão.
+          </p>
+        }
+        @if (c.incompleto) {
+          <p class="aviso" data-testid="cpu-incompleto">O navegador não entregou o perfil inteiro: o resumo abaixo está incompleto.</p>
+        }
+        @if (c.resumo; as r) {
+          <dl data-testid="cpu-categorias">
+            <dt>Tempo amostrado</dt>
+            <dd data-testid="cpu-amostrado">{{ ms(r.tempoAmostrado) }}</dd>
+            <dt>Em execução</dt>
+            <dd data-testid="cpu-ativo">{{ parte(r.tempoAtivo) }}</dd>
+            <dt>Ocioso</dt>
+            <dd data-testid="cpu-ocioso">{{ parte(r.categorias.ocioso) }}</dd>
+            <dt>Coleta de lixo</dt>
+            <dd data-testid="cpu-coleta-de-lixo">{{ parte(r.categorias.coletaDeLixo) }}</dd>
+            <dt>Interno do motor</dt>
+            <dd data-testid="cpu-programa">{{ parte(r.categorias.programa) }}</dd>
+            <dt>Extensões</dt>
+            <dd data-testid="cpu-extensoes">{{ parte(r.categorias.extensoes) }}</dd>
+          </dl>
+
+          @if (funcoesCpu().length > 0) {
+            <h4>Funções que mais consumiram</h4>
+            <table data-testid="cpu-funcoes">
+              <thead>
+                <tr>
+                  <th scope="col">Função</th>
+                  <th scope="col">Próprio</th>
+                  <th scope="col">Total</th>
+                  <th scope="col">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (funcao of funcoesCpu(); track $index) {
+                  <tr data-testid="cpu-funcao">
+                    <th scope="row" class="construtor">
+                      <span data-testid="cpu-funcao-nome">{{ funcao.nome }}</span>
+                      <small data-testid="cpu-funcao-origem">{{ funcao.origem }}</small>
+                    </th>
+                    <td>{{ funcao.proprio }}</td>
+                    <td>{{ funcao.total }}</td>
+                    <td>{{ funcao.percentual }}</td>
+                  </tr>
+                }
+                @if (outrasCpu(); as outras) {
+                  <tr data-testid="cpu-outras">
+                    <th scope="row">{{ outras.nome }}</th>
+                    <td>{{ outras.proprio }}</td>
+                    <td>—</td>
+                    <td>{{ outras.percentual }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+            <p class="nota" data-testid="cpu-nota">
+              Próprio é o tempo dentro da função; total inclui o que ela chamou. O percentual é do tempo próprio sobre o tempo em
+              execução, sem o ocioso. Os nomes e as linhas são os do código servido à página.
+            </p>
+          } @else {
+            <p data-testid="cpu-sem-funcoes">Nenhuma função da página foi amostrada.</p>
+          }
         }
       }
 
@@ -555,6 +636,42 @@ export class Resultado {
         variacao: COM_SINAL(c.contagem.variacao),
       })),
   );
+
+  /** Perfil de CPU; `null` sem a verificação ou em análise cancelada. */
+  protected readonly cpu = computed(() => (this.resultado().desfecho === 'cancelada' ? null : this.resultado().dados.cpu));
+  protected readonly perfilCpuAtivo = computed(() => this.cpu()?.ativo === true);
+  protected readonly limitePerfil = `${LIMITE_PERFIL_MANUAL_MS / 60_000} minutos`;
+
+  /** Tempo com a fatia que representa do tempo amostrado. */
+  protected parte(tempo: number): string {
+    const amostrado = this.cpu()?.resumo?.tempoAmostrado ?? 0;
+    return amostrado > 0 ? `${formatarMs(tempo)} (${((tempo / amostrado) * 100).toFixed(1)}%)` : formatarMs(tempo);
+  }
+
+  protected readonly funcoesCpu = computed(() =>
+    (this.cpu()?.resumo?.funcoes ?? []).slice(0, FUNCOES_EXIBIDAS).map((f) => ({
+      nome: f.nome,
+      origem: f.arquivo === null ? 'origem não informada' : `${f.arquivo}${f.linha === null ? '' : `:${f.linha}`}`,
+      proprio: formatarMs(f.tempoProprio),
+      total: formatarMs(f.tempoTotal),
+      percentual: `${f.percentual.toFixed(1)}%`,
+    })),
+  );
+
+  /** O que não coube na lista: as funções além das exibidas e a linha "outras" do resumo. */
+  protected readonly outrasCpu = computed(() => {
+    const resumo = this.cpu()?.resumo;
+    if (!resumo) return null;
+    const ocultas = resumo.funcoes.slice(FUNCOES_EXIBIDAS);
+    const quantidade = ocultas.length + (resumo.outras?.quantidade ?? 0);
+    if (quantidade === 0) return null;
+    const tempo = ocultas.reduce((soma, f) => soma + f.tempoProprio, 0) + (resumo.outras?.tempoProprio ?? 0);
+    return {
+      nome: `Outras (${quantidade} ${quantidade === 1 ? 'função' : 'funções'})`,
+      proprio: formatarMs(tempo),
+      percentual: `${(resumo.tempoAtivo > 0 ? (tempo / resumo.tempoAtivo) * 100 : 0).toFixed(1)}%`,
+    };
+  });
 
   protected readonly semDadosDeMemoria = computed(
     () => this.comMemoria() && this.resultado().dados.medicoes.length === 0 && this.resultado().dados.snapshots.length === 0,

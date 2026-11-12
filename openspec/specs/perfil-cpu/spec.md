@@ -1,10 +1,10 @@
-# Spec Delta
+# perfil-cpu Specification
 
 ## Purpose
 
 Coleta o perfil de CPU da página durante a análise e o resume por função, para mostrar onde o tempo de processamento foi gasto.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Verificação "CPU"
 A extensão MUST oferecer a verificação "CPU", que exige o debugger anexado e coleta o perfil de CPU da página durante a análise.
@@ -51,6 +51,17 @@ Na sessão manual com "CPU" ativa, o perfil MUST cobrir a sessão até um limite
 #### Scenario: Limite atingido
 - **WHEN** a sessão manual ultrapassa o limite de duração do perfil
 - **THEN** a coleta de CPU para, o side panel avisa, e a sessão continua com as outras verificações
+
+### Requirement: Falha da coleta de CPU informada
+Se o perfil de CPU não puder ser iniciado ou vier incompleto, o resultado MUST avisar o usuário, e as demais verificações MUST continuar.
+
+#### Scenario: Outro trace em andamento
+- **WHEN** a análise começa com "CPU" ativa e o navegador já tem um trace em andamento
+- **THEN** a análise roda sem a seção de CPU e o resultado traz o aviso de que o perfil não pôde ser coletado
+
+#### Scenario: Perfil incompleto
+- **WHEN** o navegador informa que parte dos dados do perfil foi perdida
+- **THEN** o resultado mostra o resumo e avisa que o perfil está incompleto
 
 ### Requirement: Custo da medição informado
 O resultado MUST informar que o perfil de CPU estava ativo, para que as demais métricas daquela execução sejam lidas com esse custo em mente.

@@ -6,6 +6,7 @@ import type { AndamentoExecucao, DadosColetados, EstadoExecucao, Marca } from '.
 import {
   ABA,
   ABRIR,
+  DE_CPU,
   DE_MEMORIA,
   FECHAR,
   type RelogioSimulado,
@@ -14,8 +15,10 @@ import {
   ehColeta,
   criarRelogioSimulado,
   criarTransporteFalso,
+  entregaDePerfil,
 } from './apoio-teste.ts';
 import { criarConexaoCdp } from './cdp.ts';
+import { TEMPO_LIMITE_ENTREGA_MS } from './cpu.ts';
 import { GRUPO_CENSO, GRUPO_COLETA } from './memoria.ts';
 import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, TEMPO_LIMITE_SNAPSHOT_MS, contarIteracoes, executarCenario } from './scenarios.ts';
 
@@ -892,5 +895,172 @@ describe('passos de medição', () => {
     expect(andamento.estado).toBe('cancelada');
     expect(m.cliques()).toHaveLength(0);
     expect(m.dados.snapshots).toEqual([]);
+  });
+});
+
+describe('perfil de CPU', () => {
+  const COM_AQUECIMENTO = cenario([{ tipo: 'repetir', vezes: 'iteracoes', passos: CICLO }], { aquecimento: CICLO });
+  const ehClique = (c: { metodo: string; parametros?: object }): boolean =>
+    c.metodo === 'Input.dispatchMouseEvent' && (c.parametros as { type: string }).type === 'mousePressed';
+
+  it('liga o perfil depois do aquecimento e para ao final dos passos principais', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }])];
+    const andamento = await m.rodar(COM_AQUECIMENTO, { iteracoes: 2, verificacoesAtivas: ['cpu', 'dom-listeners'] });
+
+    expect(andamento.estado).toBe('concluida');
+    const comandos = m.transporte.comandos;
+    expect(m.metodos().filter((metodo) => DE_CPU.test(metodo))).toEqual(['Tracing.start', 'Tracing.end']);
+    const inicio = m.metodos().indexOf('Tracing.start');
+    const fim = m.metodos().indexOf('Tracing.end');
+    const cliques = comandos.flatMap((c, i) => (ehClique(c) ? [i] : []));
+    // 2 cliques de aquecimento antes do perfil; os 4 das iterações, dentro dele.
+    expect(cliques.filter((i) => i < inicio)).toHaveLength(2);
+    expect(cliques.filter((i) => i > inicio && i < fim)).toHaveLength(4);
+    // As leituras de "DOM e listeners" ficam fora: a de início antes, a de fim depois.
+    const leiturasDom = comandos.flatMap((c, i) => (c.metodo === 'DOM.getDetachedDomNodes' ? [i] : []));
+    expect(leiturasDom).toHaveLength(2);
+    expect(leiturasDom[0]).toBeLessThan(inicio);
+    expect(leiturasDom[1]).toBeGreaterThan(fim);
+    expect(comandos[inicio]!.parametros).toEqual({
+      traceConfig: { includedCategories: ['disabled-by-default-v8.cpu_profiler'] },
+      transferMode: 'ReportEvents',
+    });
+
+    expect(m.dados.cpu).toMatchObject({ estado: 'concluida', ativo: true, falha: null, incompleto: false, limiteAtingido: false });
+    expect(m.dados.cpu!.resumo!.funcoes).toEqual([
+      { nome: 'pesada', arquivo: 'http://localhost:4300/app.js', linha: 1, coluna: 3, tempoProprio: 3, tempoTotal: 3, percentual: 100 },
+    ]);
+  });
+
+  it('sem "CPU": nenhum comando de trace é enviado e não há perfil', async () => {
+    const m = await montar();
+    const andamento = await m.rodar(COM_AQUECIMENTO, { verificacoesAtivas: ['processamento', 'memoria', 'dom-listeners'] });
+    expect(andamento.estado).toBe('concluida');
+    expect(m.metodos().some((metodo) => DE_CPU.test(metodo))).toBe(false);
+    expect(m.dados.cpu).toBeNull();
+  });
+
+  it('as amostras durante o snapshot e a coleta forçada ficam fora do resumo', async () => {
+    const m = await montar();
+    // O relógio do trace anda 1000 µs por leitura: a coleta forçada fica em [1000, 2000]
+    // e o snapshot, em [3000, 4000].
+    m.pagina.trace.entregas = [
+      entregaDePerfil([
+        { nome: 'antes', delta: 500 }, // 500
+        { nome: 'naColeta', delta: 1000 }, // 1500
+        { nome: 'entre', delta: 1000 }, // 2500
+        { nome: 'noCenso', delta: 1000 }, // 3500
+        { nome: 'depois', delta: 1000 }, // 4500
+      ]),
+    ];
+    const c = cenario([{ tipo: 'forcar_gc' }, { tipo: 'repetir', vezes: 1, passos: CICLO }, { tipo: 'snapshot', rotulo: 'fim' }]);
+    const andamento = await m.rodar(c, { verificacoesAtivas: ['cpu', 'memoria'] });
+
+    expect(andamento.estado).toBe('concluida');
+    expect(m.dados.snapshots).toHaveLength(1);
+    expect(m.dados.cpu!.resumo!.funcoes.map((f) => f.nome).sort()).toEqual(['antes', 'depois', 'entre']);
+    expect(m.dados.cpu!.resumo!.tempoAmostrado).toBe(2.5);
+    // Cada intervalo é lido no relógio do trace, antes e depois da operação.
+    const metodos = m.metodos();
+    const coleta = m.transporte.comandos.findIndex((c2) => ehColeta(c2.metodo, c2.parametros));
+    expect(metodos.slice(coleta - 3, coleta - 1)).toEqual(['Performance.enable', 'Performance.getMetrics']);
+    expect(metodos.filter((metodo) => metodo === 'Performance.getMetrics')).toHaveLength(4);
+  });
+
+  it('só o resumo é guardado: nada do perfil bruto fica nos dados', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }]), entregaDePerfil([{ nome: 'pesada', delta: 1000 }]).slice(1)];
+    await m.rodar(COM_AQUECIMENTO, { verificacoesAtivas: ['cpu'] });
+    const texto = JSON.stringify(m.dados);
+    expect(m.dados.cpu!.resumo!.funcoes[0]!.tempoProprio).toBe(4);
+    for (const campo of ['ProfileChunk', 'timeDeltas', 'samples', 'cpuProfile', 'callFrame']) expect(texto).not.toContain(campo);
+    expect(Object.keys(m.dados.cpu!)).toEqual(['estado', 'ativo', 'resumo', 'falha', 'incompleto', 'limiteAtingido']);
+  });
+
+  it('cancelar com o perfil ligado: o trace é parado antes de o debugger sair, sem resumo', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }])];
+    let cliques = 0;
+    m.pagina.aoComando = (metodo, parametros) => {
+      // Terceiro clique: o primeiro depois do aquecimento, já com o perfil ligado.
+      if (metodo === 'Input.dispatchMouseEvent' && parametros['type'] === 'mousePressed' && ++cliques === 3) m.controle.abort(MOTIVO_CANCELAMENTO);
+    };
+    const andamento = await m.rodar(COM_AQUECIMENTO, { verificacoesAtivas: ['cpu'] });
+
+    expect(andamento.estado).toBe('cancelada');
+    expect(m.metodos().filter((metodo) => DE_CPU.test(metodo))).toEqual(['Tracing.start', 'Tracing.end']);
+    expect(m.metodos().at(-1)).toBe('Tracing.end');
+    expect(m.pagina.trace.aberto).toBe(false);
+    expect(m.dados.cpu!.resumo).toBeNull();
+    expect(m.transporte.anexadas.size).toBe(0);
+    expect(m.transporte.ouvintesAtivos()).toBe(0);
+  });
+
+  it('passo que falha com o perfil ligado: o trace é parado e o que foi gravado vira resumo', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }])];
+    const c = cenario([{ tipo: 'repetir', vezes: 2, passos: [...CICLO, { tipo: 'clicar', seletor: '#nao-existe', tempo_limite_ms: 200 }] }]);
+    const andamento = await m.rodar(c, { verificacoesAtivas: ['cpu'] });
+
+    expect(andamento.estado).toBe('erro');
+    expect(m.metodos().filter((metodo) => DE_CPU.test(metodo))).toEqual(['Tracing.start', 'Tracing.end']);
+    expect(m.pagina.trace.aberto).toBe(false);
+    expect(m.dados.cpu).toMatchObject({ estado: 'concluida', ativo: true });
+    expect(m.dados.cpu!.resumo!.funcoes.map((f) => f.nome)).toEqual(['pesada']);
+    expect(m.transporte.anexadas.size).toBe(0);
+  });
+
+  it('conexão perdida com o perfil ligado: termina em erro, sem resumo e sem prender o runner', async () => {
+    const m = await montar();
+    let cliques = 0;
+    m.pagina.aoComando = (metodo, parametros) => {
+      if (metodo === 'Input.dispatchMouseEvent' && parametros['type'] === 'mousePressed' && ++cliques === 3) {
+        m.transporte.derrubar(ABA, 'canceled_by_user');
+        m.controle.abort(MOTIVO_CONEXAO_PERDIDA);
+      }
+    };
+    const andamento = await m.rodar(COM_AQUECIMENTO, { verificacoesAtivas: ['cpu'] });
+    expect(andamento.estado).toBe('erro');
+    expect(m.dados.cpu).toMatchObject({ estado: 'coletando', resumo: null });
+  });
+
+  it('o navegador recusa o trace: a execução conclui sem perfil, com o motivo', async () => {
+    const m = await montar();
+    m.pagina.trace.erroAoIniciar = '{"code":-32000,"message":"Tracing has already been started (possibly in another tab)."}';
+    const andamento = await m.rodar(COM_AQUECIMENTO, { iteracoes: 2, verificacoesAtivas: ['cpu', 'memoria'] });
+
+    expect(andamento.estado).toBe('concluida');
+    expect(andamento.iteracoes.filter((i) => i.completa)).toHaveLength(2);
+    expect(m.metodos().filter((metodo) => DE_CPU.test(metodo))).toEqual(['Tracing.start']);
+    expect(m.dados.cpu).toEqual({
+      estado: 'falhou',
+      ativo: false,
+      resumo: null,
+      falha: 'O perfil de CPU não foi coletado: o navegador já tem um trace em andamento (uma gravação do painel Performance, por exemplo).',
+      incompleto: false,
+      limiteAtingido: false,
+    });
+  });
+
+  it('o navegador perdeu dados do perfil: o resumo fica, marcado como incompleto', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }])];
+    m.pagina.trace.perda = true;
+    await m.rodar(COM_AQUECIMENTO, { verificacoesAtivas: ['cpu'] });
+    expect(m.dados.cpu).toMatchObject({ estado: 'concluida', incompleto: true });
+    expect(m.dados.cpu!.resumo!.funcoes).toHaveLength(1);
+  });
+
+  it('a entrega do perfil não termina: depois do prazo, fica o que chegou, como incompleto', async () => {
+    const m = await montar();
+    m.pagina.trace.entregas = [entregaDePerfil([{ nome: 'pesada', delta: 3000 }])];
+    m.pagina.trace.completar = false;
+    const antes = m.relogio.agora();
+    const andamento = await m.rodar(cenario([{ tipo: 'repetir', vezes: 1, passos: CICLO }]), { verificacoesAtivas: ['cpu'] });
+    expect(andamento.estado).toBe('concluida');
+    expect(m.relogio.agora() - antes).toBeGreaterThanOrEqual(TEMPO_LIMITE_ENTREGA_MS);
+    expect(m.dados.cpu).toMatchObject({ estado: 'concluida', incompleto: true });
+    expect(m.dados.cpu!.resumo!.funcoes).toHaveLength(1);
   });
 });

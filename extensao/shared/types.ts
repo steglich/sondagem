@@ -14,7 +14,7 @@ import type { Resumo } from './stats.ts';
 // Verificações
 // ---------------------------------------------------------------------------
 
-export type IdVerificacao = 'processamento' | 'carregamento' | 'erros-pagina' | 'memoria' | 'dom-listeners';
+export type IdVerificacao = 'processamento' | 'carregamento' | 'erros-pagina' | 'memoria' | 'dom-listeners' | 'cpu';
 
 /** O que uma verificação precisa para rodar: só código na página, ou o debugger anexado à aba. */
 export type Exigencia = 'pagina' | 'debugger';
@@ -129,6 +129,66 @@ export interface DadosColetados {
   pausasDeMedicao: Intervalo[];
   /** Contadores lidos no início e no fim da análise, com "DOM e listeners" marcada. */
   contadoresDom: { inicio: ContadoresDom | null; fim: ContadoresDom | null };
+  /** Perfil de CPU; `null` sem a verificação "CPU" marcada. */
+  cpu: ColetaCpu | null;
+}
+
+// ---------------------------------------------------------------------------
+// CPU
+// ---------------------------------------------------------------------------
+
+/** Uma função do perfil de CPU. Tempos em ms. */
+export interface FuncaoCpu {
+  /** Nome no código servido; `(anônima)` para função sem nome. */
+  nome: string;
+  /** URL do arquivo; `null` quando o navegador não informa (código avaliado, função nativa). */
+  arquivo: string | null;
+  /** Linha e coluna em base 1; `null` quando o navegador não informa. */
+  linha: number | null;
+  coluna: number | null;
+  /** Tempo das amostras em que a função estava no topo da pilha. */
+  tempoProprio: number;
+  /** Tempo das amostras em que a função estava em qualquer ponto da pilha. */
+  tempoTotal: number;
+  /** Tempo próprio sobre o tempo amostrado sem o ocioso, de 0 a 100. */
+  percentual: number;
+}
+
+/** Tempo, em ms, do que não é função da página. Fica fora da lista de funções. */
+export interface CategoriasCpu {
+  ocioso: number;
+  coletaDeLixo: number;
+  /** Tempo interno do motor: `(program)` e `(root)`. */
+  programa: number;
+  /** Funções de extensões do navegador (`chrome-extension://`), inclusive desta. */
+  extensoes: number;
+}
+
+/** O que sobra do perfil de CPU: o bruto é descartado na agregação. */
+export interface ResumoCpu {
+  /** Tempo coberto pelas amostras consideradas, em ms. */
+  tempoAmostrado: number;
+  /** `tempoAmostrado` menos o ocioso: a base dos percentuais. */
+  tempoAtivo: number;
+  amostras: number;
+  categorias: CategoriasCpu;
+  /** Por tempo próprio decrescente, até o limite do resumo. */
+  funcoes: FuncaoCpu[];
+  /** Soma das funções que ficaram fora da lista; `null` se todas couberam. */
+  outras: { quantidade: number; tempoProprio: number; percentual: number } | null;
+}
+
+export interface ColetaCpu {
+  estado: 'coletando' | 'concluida' | 'falhou';
+  /** `true` se o perfil chegou a ser ligado: as outras métricas foram medidas com esse custo. */
+  ativo: boolean;
+  resumo: ResumoCpu | null;
+  /** Por que não há resumo, quando `estado` é `falhou`. */
+  falha: string | null;
+  /** O navegador perdeu parte dos dados do perfil (ou a entrega não terminou a tempo). */
+  incompleto: boolean;
+  /** Sessão manual: o perfil parou ao atingir a duração máxima. */
+  limiteAtingido: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +305,8 @@ export interface StatusResumido {
   /** Heap usado na medição mais recente, ou `null` se ainda não houve nenhuma. */
   heapUsado: number | null;
   snapshots: number;
+  /** Situação do perfil de CPU; `null` sem a verificação "CPU". */
+  cpu: 'coletando' | 'concluida' | 'limite-atingido' | 'falhou' | null;
 }
 
 // ---------------------------------------------------------------------------

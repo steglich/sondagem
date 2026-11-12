@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { LIMITE_PERFIL_MANUAL_MS } from '../../../../shared/cpu';
 import { formatarBytes, formatarMs } from '../../../../shared/texto';
 import type { EstadoExecucao, StatusResumido, VisaoSessao } from '../../../../shared/types';
 
@@ -11,6 +12,13 @@ const ESTADOS: Record<EstadoExecucao, string> = {
   concluida: 'Concluída',
   erro: 'Erro',
   cancelada: 'Cancelada',
+};
+
+const PERFIS_CPU: Record<NonNullable<StatusResumido['cpu']>, string> = {
+  coletando: 'coletando',
+  concluida: 'concluído',
+  'limite-atingido': 'parado no limite',
+  falhou: 'não coletado',
 };
 
 /** Análise em andamento: só o status resumido. Os registros detalhados aparecem depois do fim. */
@@ -59,7 +67,21 @@ const ESTADOS: Record<EstadoExecucao, string> = {
             <dt>Snapshots</dt>
             <dd data-testid="status-snapshots">{{ s.snapshots }}</dd>
           }
+          @if (s.cpu; as cpu) {
+            <dt>Perfil de CPU</dt>
+            <dd data-testid="status-cpu">{{ perfisCpu[cpu] }}</dd>
+          }
         </dl>
+        @if (s.cpu === 'limite-atingido') {
+          <p class="aviso" role="status" data-testid="status-cpu-limite">
+            O perfil de CPU parou: atingiu o limite de {{ limitePerfil }}. As outras verificações continuam.
+          </p>
+        }
+        @if (s.cpu === 'falhou') {
+          <p class="aviso" role="status" data-testid="status-cpu-falhou">
+            O perfil de CPU não está sendo coletado; o motivo aparece no resultado. As outras verificações continuam.
+          </p>
+        }
       }
 
       <div class="acoes">
@@ -116,6 +138,8 @@ export class SessaoAtiva {
 
   protected readonly ms = formatarMs;
   protected readonly bytes = formatarBytes;
+  protected readonly perfisCpu = PERFIS_CPU;
+  protected readonly limitePerfil = `${LIMITE_PERFIL_MANUAL_MS / 60_000} minutos`;
   protected readonly estado = computed(() => ESTADOS[this.execucao()?.estado ?? 'ociosa']);
   protected readonly progresso = computed(() => {
     const execucao = this.execucao();

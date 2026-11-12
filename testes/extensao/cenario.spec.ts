@@ -64,7 +64,7 @@ test('o resultado registra a configuração efetiva e o ambiente', async ({ cont
   expect(resultado).toMatchObject({
     tipo: 'cenario',
     url: ABRIR_FECHAR.url_inicial,
-    selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners'],
+    selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners', 'cpu'],
     cenario: {
       // O valor da confirmação (2) vale mais do que o do cenário (20).
       configuracao: { nome: 'abrir-fechar', urlInicial: ABRIR_FECHAR.url_inicial, iteracoes: 2, throttling: 'padrao', versaoBuild: '1.4.2' },
@@ -386,7 +386,7 @@ test('com outro depurador na aba, a análise não começa e o painel orienta o u
 
   await expect(painel.getByTestId('falha-debugger-titulo')).toHaveText('Há um depurador aberto nesta aba.');
   await expect(painel.getByTestId('falha-debugger-orientacao')).toContainText('janela de teste dedicada');
-  await expect(painel.getByTestId('falha-debugger-dependente')).toHaveText(['Execução do cenário', 'Erros da página', 'Memória', 'DOM e listeners']);
+  await expect(painel.getByTestId('falha-debugger-dependente')).toHaveText(['Execução do cenário', 'Erros da página', 'Memória', 'DOM e listeners', 'CPU']);
   await expect(painel.getByTestId('analisar')).toBeVisible();
 
   // Nada começou: sem navegação, sem cliques, sem script, sem debugger da extensão.

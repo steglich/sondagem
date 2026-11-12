@@ -265,7 +265,7 @@ describe('documentação e validador gerado', () => {
     expect(JSON.parse(blocos[0]!)).toEqual(exemplo());
   });
 
-  it.each(['abrir-fechar', 'vazamento-listener', 'vazamento-dom', 'limpa-memoria'])('o cenário %s da página de teste é válido', (nome) => {
+  it.each(['abrir-fechar', 'vazamento-listener', 'vazamento-dom', 'limpa-memoria', 'cpu-pesada'])('o cenário %s da página de teste é válido', (nome) => {
     const texto = readFileSync(new URL(`../../pagina-teste/cenarios/${nome}.json`, import.meta.url), 'utf8');
     expect(analisarTextoCenario(texto)).toMatchObject({ ok: true, cenario: { nome } });
   });

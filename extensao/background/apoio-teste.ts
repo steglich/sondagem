@@ -11,6 +11,9 @@ export function ehColeta(metodo: string, parametros: Record<string, unknown> | o
 /** Comandos de CDP que só a medição de memória envia. */
 export const DE_MEMORIA = /^(Performance|DOM)\.|^Runtime\.(queryObjects|callFunctionOn|releaseObjectGroup)$/;
 
+/** Comandos de CDP que só o perfil de CPU envia. */
+export const DE_CPU = /^Tracing\./;
+
 class Item {}
 class Painel {}
 
@@ -136,6 +139,19 @@ export function criarPagina(transporte: TransporteFalso) {
     erroNoCenso: null as string | null,
     /** Quando `true`, a contagem do censo nunca responde. */
     censoTravado: false,
+    /** O trace do perfil de CPU, como o navegador o entrega depois de `Tracing.end`. */
+    trace: {
+      /** Um `Tracing.dataCollected` por item. */
+      entregas: [] as unknown[][],
+      /** Erro de `Tracing.start`. */
+      erroAoIniciar: null as string | null,
+      perda: false,
+      /** Com `false`, `Tracing.tracingComplete` nunca chega. */
+      completar: true,
+      /** Relógio do trace, em µs: avança 1000 a cada `Performance.getMetrics`. */
+      instante: 0,
+      aberto: false,
+    },
   };
   const seletorDe = (expressao: string): string => JSON.parse(/querySelector\(("(?:[^"\\]|\\.)*")\)/.exec(expressao)![1]!) as string;
 
@@ -148,9 +164,26 @@ export function criarPagina(transporte: TransporteFalso) {
       return { frameId: 'F', loaderId: 'L' };
     }
     if (metodo === 'Browser.getVersion') return { product: 'Chrome/158.0.8127.18' };
+    if (metodo === 'Tracing.start') {
+      if (pagina.trace.erroAoIniciar) throw new Error(pagina.trace.erroAoIniciar);
+      if (pagina.trace.aberto) throw new Error('{"code":-32000,"message":"Tracing has already been started (possibly in another tab)."}');
+      pagina.trace.aberto = true;
+      return {};
+    }
+    if (metodo === 'Tracing.end') {
+      if (!pagina.trace.aberto) throw new Error('{"code":-32000,"message":"Tracing is not started"}');
+      pagina.trace.aberto = false;
+      queueMicrotask(() => {
+        for (const value of pagina.trace.entregas) transporte.emitir(ABA, 'Tracing.dataCollected', { value });
+        if (pagina.trace.completar) transporte.emitir(ABA, 'Tracing.tracingComplete', { dataLossOccurred: pagina.trace.perda });
+      });
+      return {};
+    }
     if (metodo === 'Performance.getMetrics') {
+      pagina.trace.instante += 1000;
       return {
         metrics: [
+          { name: 'Timestamp', value: pagina.trace.instante / 1_000_000 },
           { name: 'JSEventListeners', value: pagina.memoria.listeners },
           { name: 'Nodes', value: pagina.memoria.nos },
           { name: 'JSHeapUsedSize', value: pagina.memoria.heap },
@@ -190,4 +223,32 @@ export function criarPagina(transporte: TransporteFalso) {
     return { result: { value: elemento !== undefined } };
   };
   return pagina;
+}
+
+/**
+ * Um `Tracing.dataCollected` com um perfil de CPU pequeno: cada item é uma amostra
+ * de `delta` µs com a função `nome` no topo da pilha. O perfil começa no instante 0
+ * do relógio do trace.
+ */
+export function entregaDePerfil(amostras: readonly { nome: string; delta: number }[]): unknown[] {
+  const nomes = [...new Set(amostras.map((a) => a.nome))];
+  const nos = [
+    { id: 1, callFrame: { functionName: '(root)', scriptId: 0 } },
+    ...nomes.map((nome, i) => ({
+      id: i + 2,
+      parent: 1,
+      callFrame: nome.startsWith('(')
+        ? { functionName: nome, scriptId: 0 }
+        : { functionName: nome, url: 'http://localhost:4300/app.js', lineNumber: i * 10, columnNumber: 2, scriptId: 4 },
+    })),
+  ];
+  return [
+    { name: 'Profile', id: '0x1', pid: 9, ts: 0, args: { data: { startTime: 0 } } },
+    {
+      name: 'ProfileChunk',
+      id: '0x1',
+      pid: 9,
+      args: { data: { cpuProfile: { nodes: nos, samples: amostras.map((a) => nomes.indexOf(a.nome) + 2) }, timeDeltas: amostras.map((a) => a.delta) } },
+    },
+  ];
 }

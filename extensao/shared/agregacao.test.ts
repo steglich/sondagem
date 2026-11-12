@@ -64,10 +64,10 @@ describe('aplicarLote', () => {
 describe('resumir', () => {
   it('conta os registros e aponta a pior long task', () => {
     const dados = dadosVazios();
-    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0, errosPagina: 0, heapUsado: null, snapshots: 0 });
+    expect(resumir(dados)).toEqual({ longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 0, errosPagina: 0, heapUsado: null, snapshots: 0, cpu: null });
 
     aplicarLote(dados, lote({ longTasks: [{ inicio: 1, duracao: 60 }, { inicio: 2, duracao: 310 }] }));
-    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0 });
+    expect(resumir(dados)).toEqual({ longTasks: 2, interacoes: 0, piorLongTask: 310, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0, cpu: null });
   });
 });
 

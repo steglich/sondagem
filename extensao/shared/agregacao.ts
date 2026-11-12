@@ -24,6 +24,7 @@ export function dadosVazios(): DadosColetados {
     snapshots: [],
     pausasDeMedicao: [],
     contadoresDom: { inicio: null, fim: null },
+    cpu: null,
   };
 }
 
@@ -156,6 +157,7 @@ export function resumir(dados: DadosColetados): StatusResumido {
     errosPagina: dados.errosPagina.length,
     heapUsado: dados.medicoes.filter((m) => m.heapUsado !== null).at(-1)?.heapUsado ?? null,
     snapshots: dados.snapshots.length,
+    cpu: dados.cpu === null ? null : dados.cpu.limiteAtingido ? 'limite-atingido' : dados.cpu.estado,
   };
 }
 

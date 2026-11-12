@@ -1,8 +1,8 @@
 import type { Coletor, IdVerificacao, Selecao, Verificacao } from './types.ts';
 
 /**
- * Registro central de verificações. As fases seguintes acrescentam entradas aqui
- * (CPU), e a tela de confirmação lista o que estiver registrado.
+ * Registro central de verificações. A tela de confirmação lista o que estiver
+ * registrado aqui.
  */
 export const VERIFICACOES: readonly Verificacao[] = [
   {
@@ -38,6 +38,13 @@ export const VERIFICACOES: readonly Verificacao[] = [
     id: 'dom-listeners',
     nome: 'DOM e listeners',
     descricao: 'Nós DOM desanexados e listeners acumulados (usa o debugger)',
+    exige: 'debugger',
+    coleta: [],
+  },
+  {
+    id: 'cpu',
+    nome: 'CPU',
+    descricao: 'Tempo de processamento por função; o perfil deixa a página mais lenta (usa o debugger)',
     exige: 'debugger',
     coleta: [],
   },

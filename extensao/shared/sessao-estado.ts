@@ -6,6 +6,7 @@
  */
 import { dadosVazios, estatisticasDaExecucao, resumir } from './agregacao.ts';
 import type { Cenario } from './cenario.ts';
+import { FALHA_CPU_SEM_LEITURA } from './cpu.ts';
 import { andamentoInicial } from './execucao-estado.ts';
 import { analisarMemoria } from './memoria.ts';
 import type {
@@ -70,6 +71,8 @@ export function concluir(estado: EstadoSessao, fim: DadosFim): Transicao {
   if (estado.fase === 'ociosa' || !estado.sessao) return { ok: false, motivo: 'sem-sessao' };
   const { tipo, url, selecao, inicio, dados, conexaoPerdida } = estado.sessao;
   const cancelada = fim.desfecho === 'cancelada';
+  // A análise acabou com o perfil de CPU ainda aberto (conexão perdida, extensão suspensa): não há resumo.
+  if (dados.cpu?.estado === 'coletando') dados.cpu = { ...dados.cpu, estado: 'falhou', falha: FALHA_CPU_SEM_LEITURA };
   let cenario: ResultadoCenario | null = null;
   // Sessão manual: sem iterações comparáveis, a memória sai sem série e sem classificação.
   let iteracoesDaAnalise: ResultadoCenario['iteracoes'] | null = null;

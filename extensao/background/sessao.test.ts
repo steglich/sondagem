@@ -207,6 +207,7 @@ describe('orquestração da sessão', () => {
         errosPagina: 0,
         heapUsado: null,
         snapshots: 0,
+        cpu: null,
       });
       expect(gravado()?.sessao?.dados.longTasks).toHaveLength(50);
     });

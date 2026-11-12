@@ -185,7 +185,7 @@ describe('Confirmacao', () => {
           { tipo: 'snapshot', rotulo: 'fim' },
         ],
       };
-      const TUDO: Selecao = ['processamento', 'carregamento', 'erros-pagina', 'memoria', 'dom-listeners'];
+      const TUDO: Selecao = ['processamento', 'carregamento', 'erros-pagina', 'memoria', 'dom-listeners', 'cpu'];
 
       it('oferece "Memória" e "DOM e listeners" entre as verificações', () => {
         const fixture = montar({ cenario: COM_MEMORIA, selecaoCenario: TUDO });
@@ -194,6 +194,12 @@ describe('Confirmacao', () => {
         expect(fixture.nativeElement.textContent).toContain('Memória');
         expect(fixture.nativeElement.textContent).toContain('DOM e listeners');
         expect(existe(fixture, 'confirmacao-aviso-memoria')).toBe(false);
+      });
+
+      it('oferece "CPU" entre as verificações', () => {
+        const fixture = montar({ cenario: COM_MEMORIA, selecaoCenario: TUDO });
+        expect(porId<HTMLInputElement>(fixture, 'verificacao-cpu').checked).toBe(true);
+        expect(fixture.nativeElement.textContent).toContain('CPU');
       });
 
       it('desmarcar "Memória" avisa que o vazamento não será confirmado, sem bloquear a execução', () => {
@@ -210,7 +216,7 @@ describe('Confirmacao', () => {
 
         porId<HTMLButtonElement>(fixture, 'confirmar').click();
         expect(confirmadas).toEqual([
-          expect.objectContaining({ modo: 'cenario', selecao: ['processamento', 'carregamento', 'erros-pagina', 'dom-listeners'] }),
+          expect.objectContaining({ modo: 'cenario', selecao: ['processamento', 'carregamento', 'erros-pagina', 'dom-listeners', 'cpu'] }),
         ]);
 
         // Marcar de novo tira o aviso.

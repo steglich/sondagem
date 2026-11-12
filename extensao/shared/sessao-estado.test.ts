@@ -83,6 +83,40 @@ describe('máquina de estados da sessão', () => {
   });
 });
 
+describe('perfil de CPU no resultado', () => {
+  const coleta = { estado: 'concluida', ativo: true, resumo: null, falha: null, incompleto: false, limiteAtingido: false } as const;
+
+  it('marca no resultado que o perfil de CPU estava ativo', () => {
+    const estado = ativa();
+    estado.sessao!.dados.cpu = { ...coleta };
+    const transicao = concluir(estado, fim);
+    expect(transicao.ok && transicao.estado.resultado?.dados.cpu).toMatchObject({ estado: 'concluida', ativo: true });
+  });
+
+  it('sem a verificação "CPU" o resultado não tem dados de CPU', () => {
+    const transicao = concluir(ativa(), fim);
+    expect(transicao.ok && transicao.estado.resultado?.dados.cpu).toBeNull();
+  });
+
+  it('análise que acaba com o perfil aberto: fica registrado que ele não foi lido', () => {
+    const estado = ativa();
+    estado.sessao!.dados.cpu = { ...coleta, estado: 'coletando' };
+    const transicao = concluir(estado, { ...fim, desfecho: 'interrompida' });
+    expect(transicao.ok && transicao.estado.resultado?.dados.cpu).toMatchObject({
+      estado: 'falhou',
+      ativo: true,
+      falha: 'O perfil de CPU não foi lido: a análise terminou antes de o navegador entregar os dados.',
+    });
+  });
+
+  it('cancelada: os dados de CPU são descartados com as outras medições', () => {
+    const estado = ativa();
+    estado.sessao!.dados.cpu = { ...coleta };
+    const transicao = concluir(estado, { ...fim, desfecho: 'cancelada' });
+    expect(transicao.ok && transicao.estado.resultado?.dados.cpu).toBeNull();
+  });
+});
+
 describe('visaoDe', () => {
   it('durante a análise leva só o status resumido, sem registros detalhados', () => {
     const estado = ativa();
@@ -97,7 +131,7 @@ describe('visaoDe', () => {
       alvo: { idAba: 5, url: inicio.url },
       selecao: ['processamento'],
       inicio: 1000,
-      status: { longTasks: 1, interacoes: 0, piorLongTask: 300, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0 },
+      status: { longTasks: 1, interacoes: 0, piorLongTask: 300, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0, cpu: null },
       execucao: null,
       resultado: null,
     });

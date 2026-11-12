@@ -102,4 +102,39 @@ describe('SessaoAtiva', () => {
       expect(comMemoria({ execucao: execucao('executando', 2) }).botao()).toBeNull();
     });
   });
+
+  describe('perfil de CPU', () => {
+    function comCpu(cpu: NonNullable<VisaoSessao['status']>['cpu']) {
+      const fixture = TestBed.createComponent(SessaoAtiva);
+      fixture.componentRef.setInput('url', URL_TESTE);
+      fixture.componentRef.setInput('status', visaoAtiva({ cpu }).status);
+      fixture.detectChanges();
+      const raiz = fixture.nativeElement as HTMLElement;
+      return (id: string) => raiz.querySelector(`[data-testid="${id}"]`)?.textContent?.trim().replace(/\s+/g, ' ');
+    }
+
+    it('sem "CPU" não mostra nada sobre o perfil', () => {
+      const texto = comCpu(null);
+      expect(texto('status-cpu')).toBeUndefined();
+      expect(texto('status-cpu-limite')).toBeUndefined();
+    });
+
+    it('mostra que o perfil está sendo coletado', () => {
+      const texto = comCpu('coletando');
+      expect(texto('status-cpu')).toBe('coletando');
+      expect(texto('status-cpu-limite')).toBeUndefined();
+    });
+
+    it('avisa quando o perfil para no limite de duração, com as outras verificações continuando', () => {
+      const texto = comCpu('limite-atingido');
+      expect(texto('status-cpu')).toBe('parado no limite');
+      expect(texto('status-cpu-limite')).toBe('O perfil de CPU parou: atingiu o limite de 5 minutos. As outras verificações continuam.');
+    });
+
+    it('avisa quando o perfil não pôde ser coletado', () => {
+      const texto = comCpu('falhou');
+      expect(texto('status-cpu')).toBe('não coletado');
+      expect(texto('status-cpu-falhou')).toContain('não está sendo coletado');
+    });
+  });
 });

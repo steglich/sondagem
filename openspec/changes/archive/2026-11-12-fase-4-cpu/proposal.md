@@ -23,7 +23,7 @@ Nenhuma.
 ## Impact
 
 - Código: módulo de perfil em `extensao/background/`, agregação em `shared/`, seção de CPU no resultado do side panel.
-- Uso de CDP: `Profiler`.
+- Uso de CDP: `Tracing` (o `chrome.debugger` não expõe `Profiler` a extensões) e `Performance.getMetrics`.
 - Sem novas permissões.
 - Critério de aceitação: no caso `/cpu-pesada` da página de teste, `calculoPesado` aparece no topo do resumo.
 - Depende de `fase-2-cenarios` aplicada. Independe da fase 3.

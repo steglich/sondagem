@@ -201,7 +201,7 @@ test('só com "Carregamento": nenhum censo, nenhuma coleta forçada, e os passos
   const { pagina, painel } = await abrirPaginaEPainel(context, serviceWorker, idExtensao);
   await salvarCenario(painel, { ...LIMPA, nome: 'sem-memoria', execucao: { iteracoes: 3 } });
   await painel.getByTestId('analisar').click();
-  for (const id of ['processamento', 'erros-pagina', 'memoria', 'dom-listeners']) await painel.getByTestId(`verificacao-${id}`).uncheck();
+  for (const id of ['processamento', 'erros-pagina', 'memoria', 'dom-listeners', 'cpu']) await painel.getByTestId(`verificacao-${id}`).uncheck();
   // O aviso aparece e não impede a execução.
   await expect(painel.getByTestId('confirmacao-aviso-memoria')).toContainText('um vazamento não será confirmado');
   await expect(painel.getByTestId('confirmar')).toBeEnabled();

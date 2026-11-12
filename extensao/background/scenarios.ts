@@ -8,7 +8,8 @@
  *
  * O runner altera o `AndamentoExecucao` recebido e avisa por `aoMudar` a cada
  * transição de estado e a cada início ou fim de iteração. O debugger é sempre
- * desanexado ao sair, inclusive em erro e cancelamento.
+ * desanexado ao sair, inclusive em erro e cancelamento, e o perfil de CPU, se
+ * estava ligado, é parado antes.
  */
 import {
   type Cenario,
@@ -32,6 +33,7 @@ import type {
   RegistroIteracao,
 } from '../shared/types.ts';
 import { ConexaoPerdida, type ConexaoCdp } from './cdp.ts';
+import { criarPerfilCpu } from './cpu.ts';
 import {
   type ContextoMemoria,
   forcarColeta,
@@ -326,6 +328,36 @@ export async function executarCenario(
     }
   }
 
+  /**
+   * Perfil de CPU, só com a verificação "CPU" marcada. Usa a conexão direta, para
+   * que consiga parar o trace depois de um cancelamento; `soltavel` evita que um
+   * comando sem resposta prenda o runner.
+   */
+  const perfil = plano.verificacoesAtivas.includes('cpu')
+    ? criarPerfilCpu({ cdp, dados: ambiente.memoria.dados, relogio: { agora: () => relogio.agora(), esperar: (ms) => relogio.esperar(ms) } })
+    : null;
+
+  function soltavel<T>(operacao: Promise<T>): Promise<T> {
+    return Promise.race([operacao, abortado]);
+  }
+
+  /** As amostras do perfil de CPU durante a operação ficam fora do resumo. */
+  function semPerfil<T>(operacao: () => Promise<T>): Promise<T> {
+    return perfil ? soltavel(perfil.excluir(operacao)) : operacao();
+  }
+
+  async function iniciarPerfil(): Promise<void> {
+    if (!perfil) return;
+    conferirCancelamento();
+    try {
+      await soltavel(perfil.iniciar());
+    } catch (erro) {
+      if (erro instanceof Cancelado || erro instanceof ConexaoPerdida) throw erro;
+      // Sem o perfil a análise ainda vale: o resultado avisa que a CPU não foi coletada.
+      perfil.falhar(erro);
+    }
+  }
+
   /** Comandos pelo `enviar` daqui, para que o cancelamento solte também os passos de memória. */
   const memoria: ContextoMemoria = {
     cdp: { enviar },
@@ -356,13 +388,15 @@ export async function executarCenario(
     const iteracao = contexto.iteracao?.numero ?? null;
     switch (passo.tipo) {
       case 'forcar_gc':
-        return forcarColeta(memoria);
+        return semPerfil(() => forcarColeta(memoria));
       case 'medir':
         await medirMemoria(memoria, passo.metricas, iteracao);
         return;
       case 'snapshot': {
         const ms = passo.tempo_limite_ms ?? TEMPO_LIMITE_SNAPSHOT_MS;
-        await comPrazo(tirarSnapshot(memoria, passo.rotulo, iteracao), { limite: relogio.agora() + ms, ms }, 'a contagem de objetos não terminou');
+        await semPerfil(() =>
+          comPrazo(tirarSnapshot(memoria, passo.rotulo, iteracao), { limite: relogio.agora() + ms, ms }, 'a contagem de objetos não terminou'),
+        );
       }
     }
   }
@@ -527,9 +561,12 @@ export async function executarCenario(
     }
 
     await contarDom('inicio');
+    // O perfil cobre só os passos principais: começa depois do aquecimento e para antes das leituras finais.
+    await iniciarPerfil();
     ir('executando');
     await executarLista(cenario.passos, '/passos', { iteracao: null, aquecimento: false });
     ir('coletando');
+    if (perfil) await soltavel(perfil.encerrar());
     await contarDom('fim');
     ir('concluida');
   } catch (erro) {
@@ -550,6 +587,12 @@ export async function executarCenario(
     }
     ambiente.aoMudar(andamento);
   } finally {
+    if (perfil) {
+      // Um passo falhou com a conexão de pé: o que o perfil já gravou é lido. Em
+      // cancelamento ou conexão perdida, o trace só é parado.
+      if (!sinal.aborted) await soltavel(perfil.encerrar()).catch(() => undefined);
+      await perfil.abandonar();
+    }
     cancelarAssinaturas.forEach((cancelar) => cancelar());
     await cdp.desanexar();
   }

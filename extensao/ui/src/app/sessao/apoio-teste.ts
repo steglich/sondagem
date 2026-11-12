@@ -30,7 +30,7 @@ export function visaoAtiva(status: Partial<StatusResumido> = {}): VisaoSessao {
     alvo: { idAba: 5, url: URL_TESTE },
     selecao: ['processamento', 'carregamento'],
     inicio: 1000,
-    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0, ...status },
+    status: { longTasks: 0, interacoes: 0, piorLongTask: null, carregamentos: 1, errosPagina: 0, heapUsado: null, snapshots: 0, cpu: null, ...status },
     execucao: null,
     resultado: null,
   };
@@ -207,6 +207,43 @@ export const RESULTADO_MEMORIA_FIXO: ResultadoSessao = {
 };
 
 /** Ponte em memória: faz o papel do service worker e do `chrome.storage.local`. */
+/** Sessão manual com "CPU": 35 funções no resumo (a interface lista 30) e mais 12 em "outras". */
+export const RESULTADO_CPU_FIXO: ResultadoSessao = {
+  ...RESULTADO_FIXO,
+  selecao: ['processamento', 'cpu'],
+  dados: {
+    ...RESULTADO_FIXO.dados,
+    cpu: {
+      estado: 'concluida',
+      ativo: true,
+      falha: null,
+      incompleto: false,
+      limiteAtingido: false,
+      resumo: {
+        tempoAmostrado: 2000,
+        tempoAtivo: 500,
+        amostras: 12_000,
+        categorias: { ocioso: 1500, coletaDeLixo: 20, programa: 50, extensoes: 10 },
+        funcoes: [
+          { nome: 'calculoPesado', arquivo: `${URL_TESTE}.ts`, linha: 4, coluna: 23, tempoProprio: 300, tempoTotal: 310.5, percentual: 60 },
+          { nome: '(anônima)', arquivo: `${URL_TESTE}.ts`, linha: 15, coluna: 34, tempoProprio: 40, tempoTotal: 350.5, percentual: 8 },
+          { nome: 'sort', arquivo: null, linha: null, coluna: null, tempoProprio: 12.25, tempoTotal: 12.25, percentual: 2.45 },
+          ...Array.from({ length: 32 }, (_, i) => ({
+            nome: `auxiliar${i + 1}`,
+            arquivo: 'http://localhost:4300/comum.ts',
+            linha: i + 1,
+            coluna: 1,
+            tempoProprio: 1,
+            tempoTotal: 1,
+            percentual: 0.2,
+          })),
+        ],
+        outras: { quantidade: 12, tempoProprio: 3, percentual: 0.6 },
+      },
+    },
+  },
+};
+
 export class PonteSimulada extends PonteExtensao {
   visao: VisaoSessao = VISAO_OCIOSA;
   aba: AbaAlvo | null = { id: 5, url: URL_TESTE };

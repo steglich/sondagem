@@ -13,6 +13,7 @@
  */
 import { type Marcacao, aplicarErroPagina, aplicarLote } from '../shared/agregacao.ts';
 import { type Cenario, type Passo, resolverIteracoes, validarCenario } from '../shared/cenario.ts';
+import { LIMITE_PERFIL_MANUAL_MS } from '../shared/cpu.ts';
 import { erroDaPagina } from '../shared/erros-pagina.ts';
 import { ESTADOS_FINAIS } from '../shared/execucao-estado.ts';
 import { type Limitador, criarLimitador } from '../shared/limitador.ts';
@@ -40,6 +41,7 @@ import {
 import { avaliarUrl } from '../shared/url.ts';
 import { normalizarSelecao, verificacoesComDebugger } from '../shared/verificacoes.ts';
 import { type ConexaoCdp, FalhaAnexacao } from './cdp.ts';
+import { type PerfilCpu, criarPerfilCpu } from './cpu.ts';
 import { type ContextoMemoria, lerContadoresDom, medirMemoria, tirarSnapshot } from './memoria.ts';
 import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, type Relogio, executarCenario, relogioReal } from './scenarios.ts';
 
@@ -73,6 +75,8 @@ export interface AmbienteSessao {
   relogio?: Relogio;
   /** Repete a ação a cada `ms` e devolve quem cancela. O padrão é `setInterval`. */
   repetir?: (acao: () => void, ms: number) => () => void;
+  /** Duração máxima do perfil de CPU na sessão manual. O padrão é `LIMITE_PERFIL_MANUAL_MS`. */
+  limitePerfilCpuMs?: number;
 }
 
 /** Porta aberta pelo código injetado, já reduzida ao que a orquestração usa. */
@@ -166,6 +170,10 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
   let pararMedicoes: (() => void) | null = null;
   /** `true` enquanto um snapshot pedido pelo usuário está em curso: a medição periódica espera. */
   let tirandoSnapshot = false;
+  /** Perfil de CPU da sessão manual; o do cenário pertence ao runner. */
+  let perfilCpu: PerfilCpu | null = null;
+  /** Cancela o temporizador do limite de duração do perfil de CPU. */
+  let pararLimiteCpu: (() => void) | null = null;
   const repetir =
     ambiente.repetir ??
     ((acao: () => void, ms: number) => {
@@ -255,6 +263,31 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     pararMedicoes = repetir(() => void medir(), INTERVALO_MEDICAO_MANUAL_MS);
   }
 
+  /**
+   * CPU na sessão manual: o perfil cobre a sessão até o limite de duração. No limite,
+   * só o perfil para; as outras verificações continuam. Se o navegador recusar o
+   * perfil, a sessão segue sem ele e o resultado avisa.
+   */
+  async function coletarCpuManual(sessao: SessaoEmAndamento, cdp: ConexaoCdp): Promise<void> {
+    const perfil = criarPerfilCpu({ cdp, dados: sessao.dados, relogio });
+    try {
+      await perfil.iniciar();
+    } catch (erro) {
+      perfil.falhar(erro);
+      return;
+    }
+    perfilCpu = perfil;
+    const cancelar = repetir(() => {
+      cancelar();
+      if (pararLimiteCpu === cancelar) pararLimiteCpu = null;
+      if (estado.sessao !== sessao || estado.fase !== 'ativa') return;
+      void perfil.encerrar({ limiteAtingido: true }).then(() => {
+        if (estado.sessao === sessao) persistir();
+      });
+    }, ambiente.limitePerfilCpuMs ?? LIMITE_PERFIL_MANUAL_MS);
+    pararLimiteCpu = cancelar;
+  }
+
   /** Censo de objetos a pedido, só na sessão manual com "Memória" marcada. */
   async function tirarSnapshotManual(): Promise<RespostaComando> {
     const sessao = estado.sessao;
@@ -265,7 +298,9 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     }
     tirandoSnapshot = true;
     try {
-      await tirarSnapshot(contextoMemoria(sessao, cdp), `manual-${sessao.dados.snapshots.length + 1}`);
+      const censo = (): Promise<unknown> => tirarSnapshot(contextoMemoria(sessao, cdp), `manual-${sessao.dados.snapshots.length + 1}`);
+      // A pausa do censo não é da página: fica fora do perfil de CPU.
+      await (perfilCpu ? perfilCpu.excluir(censo) : censo());
     } catch (erro) {
       const detalhe = erro instanceof Error ? erro.message : String(erro);
       return recusa('snapshot', `${MENSAGENS.snapshot} ${detalhe}`);
@@ -414,10 +449,16 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         await ambiente.injetar(idAba);
         if (cdp && selecao.includes('dom-listeners')) await lerContadoresDom(contextoMemoria(sessao, cdp), 'inicio');
         if (cdp && selecao.includes('memoria')) await coletarMemoriaManual(sessao, cdp);
+        // Por último, para que o perfil não inclua as leituras de início.
+        if (cdp && selecao.includes('cpu')) await coletarCpuManual(sessao, cdp);
       }
     } catch (erro) {
       pararMedicoes?.();
       pararMedicoes = null;
+      pararLimiteCpu?.();
+      pararLimiteCpu = null;
+      await perfilCpu?.abandonar();
+      perfilCpu = null;
       await cdp?.desanexar();
       conexao = null;
       await ambiente.removerScripts([ID_SCRIPT_SESSAO]).catch(() => 0);
@@ -478,6 +519,15 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     const medicoesPeriodicas = pararMedicoes ? 1 : 0;
     pararMedicoes?.();
     pararMedicoes = null;
+    const limiteCpu = pararLimiteCpu ? 1 : 0;
+    pararLimiteCpu?.();
+    pararLimiteCpu = null;
+    // Sessão manual: o perfil de CPU é lido antes das leituras finais e antes de o debugger sair.
+    if (perfilCpu) {
+      if (conexao?.anexada && desfecho !== 'cancelada') await perfilCpu.encerrar();
+      await perfilCpu.abandonar();
+      perfilCpu = null;
+    }
     // Sessão manual: os contadores de fim são lidos enquanto o debugger ainda está anexado.
     if (conexao?.anexada && sessao.tipo === 'sessao-manual' && sessao.selecao.includes('dom-listeners')) {
       await lerContadoresDom(contextoMemoria(sessao, conexao), 'fim').catch(() => undefined);
@@ -510,7 +560,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         { recurso: 'porta', quantidade: portasDaSessao },
         {
           recurso: 'temporizador',
-          quantidade: somar('temporizadores') + encerramento.temporizadores + publicacaoPendente + medicoesPeriodicas,
+          quantidade: somar('temporizadores') + encerramento.temporizadores + publicacaoPendente + medicoesPeriodicas + limiteCpu,
         },
         { recurso: 'depurador', quantidade: depurador },
       ] satisfies ItemLimpeza[]

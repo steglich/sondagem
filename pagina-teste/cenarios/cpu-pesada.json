@@ -1,0 +1,21 @@
+{
+  "versao_esquema": 1,
+  "nome": "cpu-pesada",
+  "descricao": "Clica no botão que chama calculoPesado, que bloqueia a thread principal por 300 ms. Com a verificação \"CPU\", calculoPesado tem de ser a primeira função da página no resumo.",
+  "url_inicial": "http://localhost:4300/cpu-pesada",
+  "execucao": { "iteracoes": 5 },
+  "aquecimento": [
+    { "tipo": "clicar", "seletor": "[data-testid='acao-pesada']" },
+    { "tipo": "aguardar_inatividade", "ms": 100 }
+  ],
+  "passos": [
+    {
+      "tipo": "repetir",
+      "vezes": "iteracoes",
+      "passos": [
+        { "tipo": "clicar", "seletor": "[data-testid='acao-pesada']" },
+        { "tipo": "aguardar_inatividade", "ms": 100 }
+      ]
+    }
+  ]
+}

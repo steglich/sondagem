@@ -301,7 +301,7 @@ describe('Painel', () => {
       expect(ponte.comandos.at(-1)).toEqual({
         tipo: 'iniciar',
         idAba: 5,
-        selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners'],
+        selecao: ['processamento', 'erros-pagina', 'memoria', 'dom-listeners', 'cpu'],
         cenario: { definicao: CENARIO_TESTE, iteracoes: 10, versaoBuild: null },
       });
       expect(porId('execucao-cenario').textContent).toBe('abrir-fechar');
@@ -316,7 +316,7 @@ describe('Painel', () => {
       await clicar('confirmar');
       await clicar('cancelar');
 
-      expect(ponte.selecoes.get('cenario:abrir-fechar')).toEqual(['processamento', 'erros-pagina', 'memoria', 'dom-listeners']);
+      expect(ponte.selecoes.get('cenario:abrir-fechar')).toEqual(['processamento', 'erros-pagina', 'memoria', 'dom-listeners', 'cpu']);
       expect(ponte.selecoes.has('manual')).toBe(false);
 
       await clicar('analisar');
