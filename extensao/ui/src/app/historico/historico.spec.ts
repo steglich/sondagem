@@ -120,6 +120,17 @@ describe('Historico', () => {
       expect(abertas).toEqual(['a']);
     });
 
+    it('"Relatório" abre o relatório daquela execução em uma aba própria, sem mexer no painel', async () => {
+      ponte.historico = [execucao('a', 1000, 1400), execucao('b', 2000, 1400)];
+      await abrir();
+      porId('relatorio-execucao-b').click();
+      expect(ponte.relatoriosDeExecucao).toEqual(['b']);
+      expect(abertas).toEqual([]);
+      ponte.historico = [execucao('rodando', 3000, 1400, { estado: 'em-andamento' })];
+      await abrir();
+      expect(porId<HTMLButtonElement>('relatorio-execucao-rodando').disabled).toBe(true);
+    });
+
     it('remove uma execução individualmente', async () => {
       ponte.historico = [execucao('a', 2000, 1400), execucao('b', 1000, 1400)];
       await abrir();

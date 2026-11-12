@@ -15,6 +15,7 @@ import { VERIFICACOES } from '../../../../shared/verificacoes';
 import { Cenarios } from '../cenarios/cenarios';
 import { Historico } from '../historico/historico';
 import { Perfis } from '../perfis/perfis';
+import { Regressao } from '../relatorio/regressao';
 import { type AnaliseConfirmada, Confirmacao } from '../sessao/confirmacao';
 import { FalhaDebugger } from '../sessao/falha-debugger';
 import { type AbaAlvo, PonteExtensao } from '../sessao/ponte';
@@ -40,7 +41,7 @@ interface DadosConfirmacao {
 @Component({
   selector: 'sd-painel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Cenarios, Confirmacao, FalhaDebugger, Historico, Perfis, SessaoAtiva, Resultado],
+  imports: [Cenarios, Confirmacao, FalhaDebugger, Historico, Perfis, Regressao, SessaoAtiva, Resultado],
   template: `
     <main>
       <h1>Sondagem</h1>
@@ -86,6 +87,9 @@ interface DadosConfirmacao {
                 Voltar ao último resultado
               </button>
             </p>
+          }
+          @if (resultado.tipo === 'cenario' && resultado.desfecho === 'concluida') {
+            <sd-regressao [id]="resultado.id" />
           }
           <sd-resultado [resultado]="resultado" />
         }

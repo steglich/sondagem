@@ -20,14 +20,17 @@
     "pagina-teste": "node scripts/servidor-pagina-teste.mjs"
   },
   "dependencies": {
+    "@angular/cdk": "~22.2.7",
     "@angular/common": "~22.2.5",
     "@angular/compiler": "~22.2.5",
     "@angular/core": "~22.2.5",
+    "@angular/forms": "~22.2.5",
     "@angular/platform-browser": "~22.2.5",
     "@angular/router": "~22.2.5",
     "idb": "^8.0.4",
     "rxjs": "~7.8.0",
     "tslib": "^2.8.0",
+    "uplot": "^1.6.32",
     "web-vitals": "^6.2.3"
   },
   "devDependencies": {

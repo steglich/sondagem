@@ -1,10 +1,12 @@
 import type { Cenario } from '../../../../shared/cenario';
+import type { LinhaDeBase } from '../../../../shared/comparacao';
 import { dadosVazios } from '../../../../shared/agregacao';
 import { type PerfilThrottling, SEM_CONDICOES } from '../../../../shared/condicoes';
 import { CONFIGURACAO_PADRAO, type ConfiguracaoArmazenamento, type RegistroExecucao, registroFinal } from '../../../../shared/historico';
 import type {
   ComandoInterface,
   ContextoSelecao,
+  DadosColetados,
   ExtensaoAtiva,
   RespostaComando,
   ResultadoSessao,
@@ -276,6 +278,12 @@ export class PonteSimulada extends PonteExtensao {
   aba: AbaAlvo | null = { id: 5, url: URL_TESTE };
   comandos: ComandoInterface[] = [];
   relatoriosAbertos = 0;
+  /** Ids dos relatórios abertos pelo histórico. */
+  readonly relatoriosDeExecucao: string[] = [];
+  /** Leituras do store de detalhes, por id: o relatório só pode fazê-las ao abrir uma seção. */
+  readonly leiturasDeDetalhes: string[] = [];
+  readonly linhasDeBase = new Map<string, LinhaDeBase>();
+  readonly baixados: { nome: string; conteudo: string; tipo: string }[] = [];
   /** Resposta forçada para o próximo comando `iniciar`. */
   recusaAoIniciar: Extract<RespostaComando, { ok: false }> | null = null;
   readonly selecoes = new Map<ContextoSelecao, Selecao>();
@@ -327,8 +335,9 @@ export class PonteSimulada extends PonteExtensao {
     this.selecoes.set(contexto, [...selecao]);
   }
 
-  override abrirRelatorio(): void {
-    this.relatoriosAbertos++;
+  override abrirRelatorio(id?: string): void {
+    if (id === undefined) this.relatoriosAbertos++;
+    else this.relatoriosDeExecucao.push(id);
   }
 
   override async listarCenarios(): Promise<Cenario[]> {
@@ -374,6 +383,39 @@ export class PonteSimulada extends PonteExtensao {
 
   override async lerResultado(id: string): Promise<ResultadoSessao | null> {
     return this.resultados.get(id) ?? null;
+  }
+
+  override async lerRegistro(id: string): Promise<RegistroExecucao | null> {
+    return this.historico.find((registro) => registro.id === id) ?? null;
+  }
+
+  override async lerDetalhes(id: string): Promise<DadosColetados | null> {
+    this.leiturasDeDetalhes.push(id);
+    return this.resultados.get(id)?.dados ?? null;
+  }
+
+  override async lerLinhaDeBase(cenario: string): Promise<LinhaDeBase | null> {
+    return this.linhasDeBase.get(cenario) ?? null;
+  }
+
+  override async definirLinhaDeBase(cenario: string, linha: LinhaDeBase): Promise<void> {
+    this.linhasDeBase.set(cenario, structuredClone(linha));
+  }
+
+  override async removerLinhaDeBase(cenario: string): Promise<void> {
+    this.linhasDeBase.delete(cenario);
+  }
+
+  override baixar(nome: string, conteudo: string, tipo: string): void {
+    this.baixados.push({ nome, conteudo, tipo });
+  }
+
+  /** Põe uma execução no histórico simulado, com o registro e os detalhes. */
+  guardar(resultado: ResultadoSessao, parcial: Partial<RegistroExecucao> = {}): RegistroExecucao {
+    const registro = registroDe(resultado, parcial);
+    this.historico = [...this.historico.filter((r) => r.id !== registro.id), registro];
+    this.resultados.set(registro.id, { ...resultado, id: registro.id });
+    return registro;
   }
 
   override async removerExecucao(id: string): Promise<void> {

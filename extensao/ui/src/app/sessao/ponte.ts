@@ -1,11 +1,13 @@
 import { Injectable } from '@angular/core';
 import type { Cenario } from '../../../../shared/cenario';
+import type { LinhaDeBase } from '../../../../shared/comparacao';
 import type { PerfilThrottling } from '../../../../shared/condicoes';
 import { outrasExtensoesAtivas } from '../../../../shared/extensoes';
 import { type ConfiguracaoArmazenamento, type RegistroExecucao, resultadoDoRegistro } from '../../../../shared/historico';
 import type {
   ComandoInterface,
   ContextoSelecao,
+  DadosColetados,
   EventoParaInterface,
   ExtensaoAtiva,
   RespostaComando,
@@ -21,6 +23,7 @@ import {
   selecionarCenario,
 } from '../../../../storage/cenarios';
 import { lerConfiguracao, salvarConfiguracao } from '../../../../storage/configuracao';
+import { definirLinhaDeBase, lerLinhaDeBase, removerLinhaDeBase } from '../../../../storage/linha-de-base';
 import { listarPerfis, removerPerfil, salvarPerfil } from '../../../../storage/perfis';
 import { type RepositorioResultados, criarRepositorio } from '../../../../storage/repository';
 import { lerSelecao, salvarSelecao } from '../../../../storage/selecao';
@@ -43,7 +46,8 @@ export abstract class PonteExtensao {
   abstract abaAlvo(): Promise<AbaAlvo | null>;
   abstract lerSelecao(contexto: ContextoSelecao): Promise<Selecao>;
   abstract salvarSelecao(contexto: ContextoSelecao, selecao: Selecao): Promise<void>;
-  abstract abrirRelatorio(): void;
+  /** Abre em uma aba própria o relatório da execução, ou a lista de execuções se não houver `id`. */
+  abstract abrirRelatorio(id?: string): void;
   /** Cenários salvos na extensão, em ordem alfabética. */
   abstract listarCenarios(): Promise<Cenario[]>;
   /** Salva um cenário já validado; outro com o mesmo nome é substituído. */
@@ -63,7 +67,17 @@ export abstract class PonteExtensao {
   abstract listarHistorico(): Promise<RegistroExecucao[]>;
   /** Resultado completo de uma execução do histórico, ou `null` se ela não existe ou não terminou. */
   abstract lerResultado(id: string): Promise<ResultadoSessao | null>;
+  /** Só o registro leve de uma execução (metadados e estatísticas); não lê os detalhes. */
+  abstract lerRegistro(id: string): Promise<RegistroExecucao | null>;
+  /** As listas detalhadas de uma execução. */
+  abstract lerDetalhes(id: string): Promise<DadosColetados | null>;
   abstract removerExecucao(id: string): Promise<void>;
+  /** Linha de base do cenário, ou `null`. */
+  abstract lerLinhaDeBase(cenario: string): Promise<LinhaDeBase | null>;
+  abstract definirLinhaDeBase(cenario: string, linha: LinhaDeBase): Promise<void>;
+  abstract removerLinhaDeBase(cenario: string): Promise<void>;
+  /** Entrega ao usuário um arquivo de texto gerado na página. */
+  abstract baixar(nome: string, conteudo: string, tipo: string): void;
   abstract lerConfiguracaoArmazenamento(): Promise<ConfiguracaoArmazenamento>;
   abstract salvarConfiguracaoArmazenamento(configuracao: ConfiguracaoArmazenamento): Promise<void>;
 }
@@ -112,8 +126,9 @@ export class PonteChrome extends PonteExtensao {
     return salvarSelecao(chrome.storage.local, contexto, selecao);
   }
 
-  override abrirRelatorio(): void {
-    void chrome.tabs.create({ url: chrome.runtime.getURL('index.html#/relatorio') });
+  override abrirRelatorio(id?: string): void {
+    const rota = id === undefined ? '#/relatorio' : `#/relatorio/${encodeURIComponent(id)}`;
+    void chrome.tabs.create({ url: chrome.runtime.getURL(`index.html${rota}`) });
   }
 
   override listarCenarios(): Promise<Cenario[]> {
@@ -165,8 +180,39 @@ export class PonteChrome extends PonteExtensao {
     return guardada ? resultadoDoRegistro(guardada) : null;
   }
 
+  override lerRegistro(id: string): Promise<RegistroExecucao | null> {
+    return this.repositorio.lerRegistro(id);
+  }
+
+  override lerDetalhes(id: string): Promise<DadosColetados | null> {
+    return this.repositorio.lerDetalhes(id);
+  }
+
   override removerExecucao(id: string): Promise<void> {
     return this.repositorio.remover(id);
+  }
+
+  override lerLinhaDeBase(cenario: string): Promise<LinhaDeBase | null> {
+    return lerLinhaDeBase(chrome.storage.local, cenario);
+  }
+
+  override definirLinhaDeBase(cenario: string, linha: LinhaDeBase): Promise<void> {
+    return definirLinhaDeBase(chrome.storage.local, cenario, linha);
+  }
+
+  override removerLinhaDeBase(cenario: string): Promise<void> {
+    return removerLinhaDeBase(chrome.storage.local, cenario);
+  }
+
+  /** Download por um link com `download`, sem a permissão `downloads`. */
+  override baixar(nome: string, conteudo: string, tipo: string): void {
+    const url = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = nome;
+    link.click();
+    // O navegador já copiou o conteúdo quando o download começa; o endereço pode ser solto.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   override lerConfiguracaoArmazenamento(): Promise<ConfiguracaoArmazenamento> {

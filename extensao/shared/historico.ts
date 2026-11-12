@@ -34,8 +34,13 @@ export type EstadoRegistro = 'em-andamento' | Desfecho;
 /** O resultado sem as listas detalhadas, que ficam em `DetalhesExecucao`. */
 export type ResumoResultado = Omit<ResultadoSessao, 'dados'>;
 
+/** Versão do formato do registro e dos detalhes. Sobe quando o que é guardado muda de forma incompatível. */
+export const VERSAO_DO_FORMATO = 1;
+
 export interface RegistroExecucao {
   id: string;
+  /** Versão do formato em que foi gravado; ausente nos registros anteriores ao campo, que são da versão 1. */
+  versaoFormato?: number;
   tipo: TipoAnalise;
   estado: EstadoRegistro;
   /** Agrupa as execuções do mesmo cenário (`cenario:<nome>`) ou as sessões manuais (`manual`). */
@@ -199,11 +204,17 @@ const DIA_MS = 24 * 60 * 60 * 1000;
 /**
  * Execuções que a política de retenção manda remover: as mais antigas além da
  * quantidade por cenário e as mais velhas que a idade máxima. Uma análise em
- * andamento nunca é removida.
+ * andamento nunca é removida, nem as de `protegidos` (as execuções de referência
+ * das linhas de base), que também não contam para a quantidade por cenário.
  */
-export function idsARemover(registros: readonly RegistroExecucao[], retencao: PoliticaRetencao, agora: number): string[] {
+export function idsARemover(
+  registros: readonly RegistroExecucao[],
+  retencao: PoliticaRetencao,
+  agora: number,
+  protegidos: readonly string[] = [],
+): string[] {
   const remover = new Set<string>();
-  const terminados = registros.filter((r) => r.estado !== 'em-andamento');
+  const terminados = registros.filter((r) => r.estado !== 'em-andamento' && !protegidos.includes(r.id));
   if (retencao.idadeMaximaDias !== null) {
     const corte = agora - retencao.idadeMaximaDias * DIA_MS;
     for (const registro of terminados) if (registro.inicio < corte) remover.add(registro.id);
@@ -232,6 +243,7 @@ export function registroEmAndamento(sessao: SessaoEmAndamento): ExecucaoGuardada
   const cenario = sessao.cenario;
   const registro: RegistroExecucao = {
     id: sessao.id,
+    versaoFormato: VERSAO_DO_FORMATO,
     tipo: sessao.tipo,
     estado: 'em-andamento',
     grupo: grupoDe(cenario?.configuracao.nome ?? null),
@@ -267,6 +279,7 @@ export function registroFinal(resultado: ResultadoSessao, definicao: Cenario | n
   const configuracao = resultado.cenario?.configuracao ?? null;
   const registro: RegistroExecucao = {
     id: resultado.id,
+    versaoFormato: VERSAO_DO_FORMATO,
     tipo: resultado.tipo,
     estado: resultado.desfecho,
     grupo: grupoDe(configuracao?.nome ?? null),

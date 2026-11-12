@@ -413,6 +413,50 @@ describe('Painel', () => {
     expect(ponte.assinantes).toBe(0);
   });
 
+  describe('linha de base no resumo', () => {
+    const comDuracao = (id: string, mediana: number) => {
+      const cenario = RESULTADO_CENARIO_FIXO.cenario!;
+      return { ...RESULTADO_CENARIO_FIXO, id, cenario: { ...cenario, estatisticas: cenario.estatisticas.map((e) => (e.id === 'duracao-iteracao' ? { ...e, mediana } : e)) } };
+    };
+
+    async function concluir(mediana: number): Promise<void> {
+      ponte.guardar(comDuracao('base', 1000), { inicio: 500 });
+      ponte.linhasDeBase.set('abrir-fechar', { id: 'base', limites: {} });
+      const nova = comDuracao('nova', mediana);
+      ponte.guardar(nova);
+      await abrir();
+      // A execução termina: o service worker publica o resultado.
+      ponte.publicar({ ...VISAO_OCIOSA, resultado: nova });
+      vi.advanceTimersByTime(1100);
+      for (let i = 0; i < 4; i++) await assentar();
+    }
+
+    it('execução concluída acima do limite da linha de base: o resumo sinaliza a regressão', async () => {
+      await concluir(1300);
+      expect(porId('regressao').textContent).toContain('Duração da iteração (+30.0%, limite de 10%)');
+    });
+
+    it('execução dentro do limite: o resumo diz que não houve regressão', async () => {
+      await concluir(1050);
+      expect(existe('regressao')).toBe(false);
+      expect(porId('sem-regressao').textContent).toContain('Sem regressão');
+    });
+
+    it('sem linha de base, ou em sessão manual, o resumo não fala de regressão', async () => {
+      ponte.guardar(comDuracao('nova', 1300));
+      await abrir();
+      ponte.publicar({ ...VISAO_OCIOSA, resultado: comDuracao('nova', 1300) });
+      vi.advanceTimersByTime(1100);
+      for (let i = 0; i < 4; i++) await assentar();
+      expect(existe('regressao-avaliacao')).toBe(false);
+
+      ponte.publicar({ ...VISAO_OCIOSA, resultado: RESULTADO_FIXO });
+      vi.advanceTimersByTime(1100);
+      for (let i = 0; i < 4; i++) await assentar();
+      expect(existe('regressao-avaliacao')).toBe(false);
+    });
+  });
+
   it('o botão de relatório abre o relatório', async () => {
     await abrir();
     await clicar('abrir-relatorio');

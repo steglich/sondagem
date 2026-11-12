@@ -14,6 +14,7 @@ import {
 } from '../shared/types.ts';
 import { outrasExtensoesAtivas } from '../shared/extensoes.ts';
 import { lerConfiguracao } from '../storage/configuracao.ts';
+import { idsDeReferencia } from '../storage/linha-de-base.ts';
 import { listarPerfis } from '../storage/perfis.ts';
 import { criarRepositorio } from '../storage/repository.ts';
 import { type TransporteCdp, criarConexaoCdp } from './cdp.ts';
@@ -107,6 +108,7 @@ const orquestrador = criarOrquestrador({
   repositorio: criarRepositorio(),
   lerPerfis: () => listarPerfis(chrome.storage.local),
   lerConfiguracao: () => lerConfiguracao(chrome.storage.local),
+  lerProtegidos: () => idsDeReferencia(chrome.storage.local),
   // Só o nome e o estado de cada extensão são lidos, para registrar no resultado.
   outrasExtensoes: async () => outrasExtensoesAtivas(await chrome.management.getAll(), chrome.runtime.id),
   navegador() {

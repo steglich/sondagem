@@ -29,6 +29,8 @@ const CENARIO: Cenario = {
 };
 
 interface Opcoes {
+  /** Ids das execuções de referência das linhas de base. */
+  protegidos?: () => string[];
   gravado?: EstadoSessao;
   repositorio?: ReturnType<typeof criarRepositorioFalso>;
   perfis?: PerfilThrottling[];
@@ -61,6 +63,7 @@ function montar(opcoes: Opcoes = {}) {
     repositorio,
     lerPerfis: async () => opcoes.perfis ?? [],
     lerConfiguracao: async () => opcoes.configuracao ?? CONFIGURACAO_PADRAO,
+    lerProtegidos: async () => opcoes.protegidos?.() ?? [],
     outrasExtensoes: async () => opcoes.extensoes ?? [],
     navegador: () => ({ versao: '158.0.8127.18', userAgent: 'Mozilla/5.0 Chrome/158.0.0.0' }),
     novoId: () => `analise-${++proximoId}`,
@@ -540,6 +543,18 @@ describe('limites e retenção ao salvar', () => {
       ids.push((await m.ateTerminar()).id);
     }
     expect((await m.repositorio.listar()).map((r) => r.id).sort()).toEqual([ids[1], ids[2]].sort());
+  });
+
+  it('a execução marcada como linha de base não é removida pela retenção', async () => {
+    const ids: string[] = [];
+    // A primeira execução vira a referência depois de terminar.
+    const m = montar({ configuracao: { ...CONFIGURACAO_PADRAO, retencao: { maximoPorCenario: 2, idadeMaximaDias: null } }, protegidos: () => ids.slice(0, 1) });
+    const umaVez = { ...CENARIO, execucao: { iteracoes: 1 } };
+    for (let i = 0; i < 4; i++) {
+      await m.executar(umaVez);
+      ids.push((await m.ateTerminar()).id);
+    }
+    expect((await m.repositorio.listar()).map((r) => r.id).sort()).toEqual([ids[0], ids[2], ids[3]].sort());
   });
 });
 

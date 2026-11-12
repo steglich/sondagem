@@ -102,6 +102,15 @@ function numero(texto: string): number | null {
                 <button
                   type="button"
                   class="secundario"
+                  [attr.data-testid]="'relatorio-execucao-' + registro.id"
+                  [disabled]="registro.estado === 'em-andamento'"
+                  (click)="abrirRelatorio(registro.id)"
+                >
+                  Relatório
+                </button>
+                <button
+                  type="button"
+                  class="secundario"
                   [attr.data-testid]="'remover-execucao-' + registro.id"
                   [disabled]="registro.estado === 'em-andamento'"
                   (click)="remover(registro.id)"
@@ -315,6 +324,11 @@ export class Historico {
 
   protected percentual(fracao: number): string {
     return `${(fracao * 100).toFixed(fracao < 0.1 ? 1 : 0)}%`;
+  }
+
+  /** Abre o relatório completo da execução em uma aba própria. */
+  protected abrirRelatorio(id: string): void {
+    this.ponte.abrirRelatorio(id);
   }
 
   protected async remover(id: string): Promise<void> {

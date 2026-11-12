@@ -34,7 +34,8 @@ npx playwright test testes/extensao/cenario.spec.ts --project extensao -g "abrir
 npx playwright test testes/extensao/memoria.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP no navegador
 npx playwright test testes/extensao/cpu.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP do perfil de CPU
 npx playwright test testes/extensao/condicoes.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP das condições de teste
-npx playwright test --project medicao --no-deps   # só as comparações de tempo: variação entre execuções e impacto do painel
+npx playwright test --project medicao --no-deps   # só as medições de tempo: variação entre execuções, impacto do painel e relatório grande
+npx playwright test testes/extensao/relatorio.spec.ts --project extensao   # relatório, comparação e exportação de ponta a ponta
 node scripts/gerar-validador.mjs   # regenera o validador depois de mudar cenario.schema.json
 ```
 
@@ -53,12 +54,14 @@ extensao/
   injected/          # código que roda na página testada (TS puro, bundle IIFE via esbuild; entrada: entrada.ts)
   shared/            # tipos e funções puras; testes Vitest ao lado (*.test.ts)
     cenario.schema.json   # JSON Schema do cenário (versão 1); gerado/ guarda o validador compilado
-  storage/           # persistência: seleção, cenários, perfis de throttling e configuração (chrome.storage.local)
+  storage/           # persistência: seleção, cenários, perfis de throttling, configuração e linhas de base (chrome.storage.local)
                      # e repository.ts, o histórico de resultados (IndexedDB, via idb)
-  ui/                # workspace Angular: side panel (#/painel) e relatório (#/relatorio, lazy); testes *.spec.ts
+  ui/                # workspace Angular: side panel (#/painel), relatório (#/relatorio/:id) e comparação
+                     # (#/relatorio/comparar/:idA/:idB), os dois últimos lazy; testes *.spec.ts
 pagina-teste/        # casos controlados (HTML + TS sem framework), servidos na porta 4300; cenarios/ tem cenários de teste
                      # /login e /protegida simulam uma aplicação autenticada (o servidor redireciona sem o cookie)
 docs/cenario.md      # formato do cenário, com exemplo (um teste valida o exemplo)
+docs/exportacao.md   # formatos de exportação JSON e CSV (um teste confere um arquivo exportado contra o documento)
 scripts/             # build.mjs, gerar-validador.mjs, verificar-isolamento.mjs, servidor-pagina-teste.mjs
 testes/              # Playwright: extensao/ (extensão carregada), pagina-teste/ e medicao/ (comparações de tempo;
                      # projeto que roda depois dos outros, em série, para não medir a carga dos testes paralelos)
@@ -95,6 +98,7 @@ página (injected.js, mundo isolado)        service worker                      
 - **Página → service worker**: `extensao/injected/sessao-pagina.ts` abre a porta e só instala os observadores depois de receber `configurar`; sem essa mensagem (não há sessão para a aba) o script termina sem instalar nada. `extensao/injected/observers.ts` coleta long tasks e interações, `extensao/injected/vitals.ts` liga a `web-vitals`, e `extensao/injected/lotes.ts` envia um lote por segundo, nunca um evento por mensagem.
 - **Service worker**: `extensao/background/sessao.ts` valida a aba, registra o content script, agrega os lotes (`extensao/shared/agregacao.ts`) e grava o estado em `chrome.storage.session` (chave `sondagem:sessao`). O resultado não fica lá: vai para o histórico, e o estado guarda só o `idResultado` (ver "Histórico"). As transições estão em `extensao/shared/sessao-estado.ts` (ociosa → ativa → parando → ociosa); só existe uma sessão por vez. Ao acordar e em `tabs.onRemoved`, uma sessão cuja aba sumiu é encerrada como interrompida, com os dados já recebidos.
 - **Service worker → interface**: durante a análise vai só o status resumido, limitado a uma publicação por segundo por `extensao/shared/limitador.ts`; os registros detalhados vão apenas no resultado. A interface aplica o mesmo limite em `extensao/ui/src/app/sessao/servico-sessao.ts`.
+- **Relatório**: abre em aba própria e não fala com o service worker: lê o histórico direto do IndexedDB (ver "Relatório, comparação e exportação").
 - **Interface**: `extensao/ui/src/app/painel/painel.ts` alterna entre confirmação, sessão ativa e resultado (componentes em `extensao/ui/src/app/sessao/`); ocioso, mostra também as telas de cenários (`extensao/ui/src/app/cenarios/`), de perfis de throttling (`perfis/`) e do histórico (`historico/`). Com um cenário escolhido, a confirmação oferece os modos "Cenário" e "Sessão manual". O painel aberto em aba própria aceita `index.html?aba=<id>#/painel` para indicar a aba alvo; os testes de integração usam esse caminho, porque o Playwright não abre o side panel.
 
 ## Cenários, debugger e runner
@@ -135,6 +139,22 @@ O formato para o usuário está em `docs/cenario.md`. Comandos de CDP em `COMAND
 - **Retenção**: `idsARemover` (quantidade por cenário e idade), aplicada depois de cada gravação final. Padrões em `CONFIGURACAO_PADRAO`; a configuração fica em `chrome.storage.local` (`extensao/storage/configuracao.ts`).
 - **Parcial**: `ehParcial` e `podeSerReferencia`. Só execução de cenário concluída, sem falha de sessão, serve de referência e entra em `variacaoEntreExecucoes` (`extensao/shared/variacao.ts`: coeficiente de variação da mediana de cada métrica entre execuções do mesmo cenário, condições e número de iterações).
 - Nos testes unitários do orquestrador o repositório é o `criarRepositorioFalso` de `apoio-teste.ts`; o de verdade é testado com `fake-indexeddb`. Nos de integração, `historico()` e `estadoGravado()` de `testes/extensao/apoio.ts` leem o IndexedDB pelo service worker.
+
+## Relatório, comparação e exportação
+
+As telas ficam em `extensao/ui/src/app/relatorio/`; o que elas calculam é puro e fica em `extensao/shared/` (`relatorio.ts`, `comparacao.ts`, `exportacao.ts`). O formato dos arquivos exportados está em `docs/exportacao.md`.
+
+- **Rotas**: `#/relatorio/:id` (uma execução), `#/relatorio/comparar/:idA/:idB` e `#/relatorio` (lista do histórico). Os parâmetros chegam como inputs (`withComponentInputBinding`). O botão "Relatório" de cada execução do histórico do painel abre a rota em nova aba (`ponte.abrirRelatorio(id)`).
+- **Leitura em duas etapas**: a abertura chama só `repositorio.lerRegistro` (store `execucoes`) e desenha o cabeçalho (`cabecalho.ts`) e as estatísticas. `lerDetalhes` (store `detalhes`) roda uma vez, quando a primeira seção é aberta. A comparação e a regressão usam só os registros leves.
+- **Seções**: `secoesDoRelatorio` devolve uma por verificação que rodou ("Memória" e "DOM e listeners" dividem a mesma; execução cancelada não tem nenhuma). Cada uma é um `<details>` fechado com um bloco `@defer`: o código da seção, o Angular CDK e o uPlot só são carregados quando ela abre.
+- **Gráficos** (`grafico.ts`): wrapper do uPlot com as séries por signal. O gráfico só é criado quando entra na área visível (`IntersectionObserver`), e o uPlot é importado nesse momento. Quem cria é o token `CRIADOR_DE_GRAFICO`, trocado nos testes de componente (o jsdom não tem canvas nem `matchMedia`, que o uPlot usa ao ser importado).
+- **Listas** (`lista-virtual.ts`): toda lista do relatório usa `cdk-virtual-scroll-viewport` com linha de altura fixa. Não renderize uma lista de `DadosColetados` com `@for` direto.
+- **Medições por iteração**: `medicoesPorIteracao` monta uma linha por iteração; serve aos gráficos e ao CSV, e faz uma passada por lista (nunca uma por iteração).
+- **Comparação**: `compararExecucoes(a, b)` usa a mediana de cada métrica (`IdMetricaIteracao`), devolve a diferença absoluta e a percentual e lista as diferenças de condições e de ambiente. Recusa cenários diferentes, sessão manual e o que `podeSerReferencia` recusa. Menor é melhor para todas as métricas atuais.
+- **Linha de base** (`extensao/storage/linha-de-base.ts`, chave `sondagem:linhas-de-base`): por cenário, o id da execução de referência e os limites por métrica (padrão `LIMITE_REGRESSAO_PADRAO`, 10%). `avaliarRegressao` marca a métrica que piorou mais que o limite; com a linha de base em zero, qualquer aumento conta. O componente `regressao.ts` aparece no relatório e no resumo do painel. A retenção não remove a referência: o service worker passa `idsDeReferencia` a `aplicarRetencao`. Se o usuário remover a referência à mão, `carregarLinhaDeBase` desfaz a linha de base e a tela avisa.
+- **Exportação**: `exportarJson` (registro e detalhes, com `versao_exportacao`), `csvPorIteracao` e `csvDaComparacao`, todos sobre `gerarCsv` (RFC 4180, BOM, CRLF; com `;` os números usam vírgula decimal). O download é `ponte.baixar`, um link com `download`, sem a permissão `downloads`. Nada é mascarado na exportação: o cenário já está mascarado no histórico.
+- **Formato**: `RegistroExecucao.versaoFormato` (`VERSAO_DO_FORMATO`); o relatório avisa quando encontra uma versão maior que a que conhece.
+- O teste de responsividade (`testes/medicao/relatorio-grande.spec.ts`) grava no IndexedDB um resultado com 10.000 long tasks e censos no tamanho máximo e falha se o relatório produzir uma long task acima de 200 ms.
 
 ## Memória
 

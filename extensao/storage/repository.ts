@@ -30,6 +30,10 @@ export interface RepositorioResultados {
   gravar(registro: RegistroExecucao, dados: DadosColetados): Promise<void>;
   /** Registro e detalhes de uma execução, ou `null` se não existe. */
   ler(id: string): Promise<ExecucaoGuardada | null>;
+  /** Só o registro leve (metadados e estatísticas), sem tocar no store `detalhes`. */
+  lerRegistro(id: string): Promise<RegistroExecucao | null>;
+  /** Só as listas detalhadas de uma execução. */
+  lerDetalhes(id: string): Promise<DadosColetados | null>;
   /** Registros, da execução mais recente para a mais antiga, sem os detalhes. Com `grupo`, só os daquele cenário. */
   listar(filtro?: { grupo?: string }): Promise<RegistroExecucao[]>;
   /** Execuções que ficaram como "em andamento". */
@@ -37,8 +41,8 @@ export interface RepositorioResultados {
   remover(id: string): Promise<void>;
   /** Soma do tamanho estimado de todas as execuções, em bytes. */
   tamanhoTotal(): Promise<number>;
-  /** Remove o que a política de retenção manda e devolve os ids removidos. */
-  aplicarRetencao(retencao: PoliticaRetencao, agora: number): Promise<string[]>;
+  /** Remove o que a política de retenção manda e devolve os ids removidos. As execuções de `protegidos` ficam. */
+  aplicarRetencao(retencao: PoliticaRetencao, agora: number, protegidos?: readonly string[]): Promise<string[]>;
 }
 
 /** O banco só é aberto no primeiro uso. Nos testes, o `indexedDB` global é o do `fake-indexeddb`. */
@@ -77,6 +81,14 @@ export function criarRepositorio(): RepositorioResultados {
       return registro && detalhes ? { registro, dados: detalhes.dados } : null;
     },
 
+    async lerRegistro(id) {
+      return (await (await abrir()).get('execucoes', id)) ?? null;
+    },
+
+    async lerDetalhes(id) {
+      return (await (await abrir()).get('detalhes', id))?.dados ?? null;
+    },
+
     async listar(filtro) {
       const db = await abrir();
       const registros =
@@ -94,8 +106,8 @@ export function criarRepositorio(): RepositorioResultados {
       return (await repositorio.listar()).reduce((total, registro) => total + registro.tamanho, 0);
     },
 
-    async aplicarRetencao(retencao, agora) {
-      const ids = idsARemover(await repositorio.listar(), retencao, agora);
+    async aplicarRetencao(retencao, agora, protegidos = []) {
+      const ids = idsARemover(await repositorio.listar(), retencao, agora, protegidos);
       await removerVarios(ids);
       return ids;
     },

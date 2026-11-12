@@ -278,6 +278,8 @@ export function criarRepositorioFalso(): RepositorioFalso {
       guardadas.set(registro.id, copia);
     },
     ler: async (id) => structuredClone(guardadas.get(id) ?? null),
+    lerRegistro: async (id) => structuredClone(guardadas.get(id)?.registro ?? null),
+    lerDetalhes: async (id) => structuredClone(guardadas.get(id)?.dados ?? null),
     listar: async (filtro) =>
       [...guardadas.values()]
         .map((g) => structuredClone(g.registro))
@@ -286,8 +288,8 @@ export function criarRepositorioFalso(): RepositorioFalso {
     emAndamento: async () => (await repositorio.listar()).filter((r) => r.estado === 'em-andamento'),
     remover: async (id) => void guardadas.delete(id),
     tamanhoTotal: async () => (await repositorio.listar()).reduce((total, r) => total + r.tamanho, 0),
-    async aplicarRetencao(retencao, agora) {
-      const ids = idsARemover(await repositorio.listar(), retencao, agora);
+    async aplicarRetencao(retencao, agora, protegidos = []) {
+      const ids = idsARemover(await repositorio.listar(), retencao, agora, protegidos);
       ids.forEach((id) => guardadas.delete(id));
       return ids;
     },

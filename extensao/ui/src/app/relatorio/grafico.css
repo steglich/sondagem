@@ -1,0 +1,20 @@
+@import 'uplot/dist/uPlot.min.css';
+
+.sd-grafico {
+  margin: 0 0 16px;
+}
+
+.sd-grafico figcaption {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.sd-grafico-alvo {
+  width: 100%;
+  min-height: 220px;
+}
+
+.sd-grafico .u-legend {
+  font-size: 0.85rem;
+  text-align: left;
+}

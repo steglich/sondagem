@@ -1,7 +1,7 @@
 // `auto` põe no global as classes do IndexedDB (IDBRequest, IDBKeyRange...), que o `idb` usa.
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dadosVazios } from '../shared/agregacao.ts';
 import type { RegistroExecucao } from '../shared/historico.ts';
 import type { DadosColetados } from '../shared/types.ts';
@@ -133,6 +133,32 @@ describe('repositório de resultados', () => {
     expect(restantes).not.toContain('a-1');
     expect(restantes).toContain('b-1');
     expect(await repositorio.ler('a-1')).toBeNull();
+  });
+
+  it('a leitura em duas etapas: o registro leve não lê o store `detalhes`, e os detalhes vêm à parte', async () => {
+    await repositorio.gravar(registro({ id: 'a' }), dados(3));
+    await repositorio.listar();
+    const transacoes = vi.spyOn(IDBDatabase.prototype, 'transaction');
+    try {
+      expect(await repositorio.lerRegistro('a')).toMatchObject({ id: 'a', estado: 'concluida' });
+      expect(await repositorio.lerRegistro('nao-existe')).toBeNull();
+      await repositorio.listar();
+      const stores = (): string[] => transacoes.mock.calls.flatMap(([nomes]) => (typeof nomes === 'string' ? [nomes] : [...nomes]));
+      expect(stores()).toContain('execucoes');
+      expect(stores()).not.toContain('detalhes');
+
+      expect((await repositorio.lerDetalhes('a'))?.longTasks).toHaveLength(3);
+      expect(await repositorio.lerDetalhes('nao-existe')).toBeNull();
+      expect(stores()).toContain('detalhes');
+    } finally {
+      transacoes.mockRestore();
+    }
+  });
+
+  it('a retenção poupa as execuções protegidas (linhas de base)', async () => {
+    for (let i = 1; i <= 4; i++) await repositorio.gravar(registro({ id: `a-${i}`, inicio: i }), dados());
+    expect(await repositorio.aplicarRetencao({ maximoPorCenario: 2, idadeMaximaDias: null }, 1000, ['a-1'])).toEqual(['a-2']);
+    expect((await repositorio.listar()).map((r) => r.id)).toEqual(['a-4', 'a-3', 'a-1']);
   });
 
   it('os dados continuam lá para outra instância do repositório (reinício do navegador)', async () => {

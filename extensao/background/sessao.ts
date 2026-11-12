@@ -100,6 +100,8 @@ export interface AmbienteSessao {
   lerPerfis?: () => Promise<PerfilThrottling[]>;
   /** Limites e retenção do histórico. O padrão é `CONFIGURACAO_PADRAO`. */
   lerConfiguracao?: () => Promise<ConfiguracaoArmazenamento>;
+  /** Ids das execuções de referência das linhas de base, que a retenção nunca remove. */
+  lerProtegidos?: () => Promise<string[]>;
   /** Outras extensões ativas no perfil do navegador. */
   outrasExtensoes?: () => Promise<ExtensaoAtiva[]>;
   navegador?: () => Navegador | null;
@@ -269,7 +271,8 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
       // Histórico cheio: a execução entra só com as estatísticas, e o resultado diz o que ficou de fora.
       if (outras + final.registro.tamanho > configuracao.limiteHistoricoMb * BYTES_POR_MB) final = registroFinal(resultado, definicao, 0);
       await repositorio.gravar(final.registro, final.dados);
-      await repositorio.aplicarRetencao(configuracao.retencao, ambiente.agora());
+      const protegidos = (await ambiente.lerProtegidos?.().catch(() => undefined)) ?? [];
+      await repositorio.aplicarRetencao(configuracao.retencao, ambiente.agora(), protegidos);
       return { ...novo, resultado: final.resultado };
     } catch (erro) {
       console.error('Sondagem: falha ao gravar o resultado no histórico', erro);

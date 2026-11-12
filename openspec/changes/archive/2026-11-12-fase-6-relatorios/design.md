@@ -48,3 +48,17 @@ JSON: registro completo mais `versao_exportacao: 1`. CSV: gerado por função pu
 - [Vírgula como separador abre errado em planilhas com localidade pt-BR] → Opção de separador ponto e vírgula na exportação.
 - [Comparação entre execuções com verificações diferentes] → Só as métricas presentes nas duas são comparadas; as demais aparecem como "sem dado".
 - [Mudança de formato dos resultados em fases futuras] → O registro carrega a versão do formato, e o relatório informa quando encontra uma versão que não conhece.
+
+## Ajustes feitos na implementação
+
+- **Sem variação de tamanho por construtor.** A spec pede, nos candidatos a vazamento, "a variação de contagem e de tamanho". O `chrome.debugger` não entrega heap snapshot a extensões (fase 3), então não existe tamanho por construtor. O relatório lista a variação de contagem por construtor e mostra a variação de tamanho do heap como um todo.
+- **Métricas comparadas.** A comparação e a linha de base usam a mediana das três métricas por iteração que já existem nas estatísticas (duração da iteração, tempo em long tasks, pior interação). Não há uma métrica "INP" por iteração: o cenário de regressão da spec é coberto pela "pior interação".
+- **Linha de base em zero.** Sem percentual possível, qualquer aumento conta como regressão.
+- **Seções fechadas na abertura.** O `@defer` de cada seção dispara quando ela é aberta (há um botão para abrir todas), e não ao entrar na área visível: assim a abertura nunca lê o store `detalhes`. O que espera a área visível é a criação de cada gráfico.
+- **Detalhes lidos de uma vez.** O store `detalhes` guarda um registro por execução; a primeira seção aberta lê esse registro inteiro e as outras o reaproveitam.
+- **Separador e decimal.** Com ponto e vírgula, os números saem com vírgula decimal (com vírgula, ponto decimal, como na suposição registrada). Sem isso a opção não resolveria a abertura em planilhas pt-BR.
+- **Versão do formato.** O registro ganhou `versaoFormato` (ausente nos registros anteriores, que valem 1).
+- **Referência protegida não conta na quantidade.** A execução de referência fica fora da conta de "máximo por cenário": com limite de 50, o cenário pode ter 51.
+- **Seção de carregamento.** Não estava nas tasks, mas a spec pede uma seção para cada verificação que produziu dados; é uma lista dos carregamentos com as métricas.
+- **Dependência extra.** O Angular CDK exige `@angular/forms` como peer dependency; ele entrou no `package.json`, na mesma versão do Angular.
+- **Teste de responsividade no projeto `medicao`**, pelo mesmo motivo dos outros testes de tempo.
