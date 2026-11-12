@@ -1,8 +1,11 @@
 import type { Cenario } from '../../../../shared/cenario';
 import { dadosVazios } from '../../../../shared/agregacao';
+import { type PerfilThrottling, SEM_CONDICOES } from '../../../../shared/condicoes';
+import { CONFIGURACAO_PADRAO, type ConfiguracaoArmazenamento, type RegistroExecucao, registroFinal } from '../../../../shared/historico';
 import type {
   ComandoInterface,
   ContextoSelecao,
+  ExtensaoAtiva,
   RespostaComando,
   ResultadoSessao,
   Selecao,
@@ -37,6 +40,7 @@ export function visaoAtiva(status: Partial<StatusResumido> = {}): VisaoSessao {
 }
 
 export const RESULTADO_FIXO: ResultadoSessao = {
+  id: 'manual-1',
   tipo: 'sessao-manual',
   desfecho: 'concluida',
   url: URL_TESTE,
@@ -73,6 +77,10 @@ export const RESULTADO_FIXO: ResultadoSessao = {
   conexaoPerdida: null,
   cenario: null,
   memoria: null,
+  condicoes: SEM_CONDICOES,
+  extensoes: [],
+  navegador: { versao: '158.0.8127.18', userAgent: 'Mozilla/5.0 Chrome/158.0.0.0' },
+  truncado: [],
 };
 
 export const CENARIO_TESTE: Cenario = {
@@ -94,6 +102,7 @@ export const CENARIO_TESTE: Cenario = {
 
 /** Execução de 20 iterações, uma delas com passo pulado, e dois erros da página. */
 export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
+  id: 'cenario-1',
   tipo: 'cenario',
   desfecho: 'concluida',
   url: CENARIO_TESTE.url_inicial,
@@ -127,6 +136,7 @@ export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
     falhas: [
       { caminho: '/passos/0/passos/1', tipoPasso: 'clicar', iteracao: 4, motivo: 'Tempo limite de 200 ms: nenhum elemento corresponde a "#x".', acao: 'pulou' },
     ],
+    falhaDeSessao: null,
     estatisticas: [
       { id: 'duracao-iteracao', amostras: 19, mediana: 1400, p75: 1450.5, p95: 1600 },
       { id: 'tempo-long-tasks', amostras: 19, mediana: 0, p75: 60, p95: 118.25 },
@@ -134,7 +144,24 @@ export const RESULTADO_CENARIO_FIXO: ResultadoSessao = {
     ],
   },
   memoria: null,
+  condicoes: {
+    perfil: 'padrao',
+    cpu: 4,
+    rede: { latenciaMs: 150, downloadKbps: 1600, uploadKbps: 750 },
+    cacheDesligado: true,
+    cacheLimpo: true,
+    storageLimpo: [],
+  },
+  extensoes: [],
+  navegador: { versao: '158.0.8127.18', userAgent: 'Mozilla/5.0 Chrome/158.0.0.0' },
+  truncado: [],
 };
+
+/** Registro do histórico a partir de um resultado, com os campos que o teste quiser trocar. */
+export function registroDe(resultado: ResultadoSessao, parcial: Partial<RegistroExecucao> = {}): RegistroExecucao {
+  const registro = registroFinal(resultado, null, Infinity).registro;
+  return { ...registro, ...parcial, resumo: registro.resumo ? { ...registro.resumo, id: parcial.id ?? registro.id } : null };
+}
 
 const KB = 1024;
 
@@ -254,6 +281,12 @@ export class PonteSimulada extends PonteExtensao {
   readonly selecoes = new Map<ContextoSelecao, Selecao>();
   readonly cenarios = new Map<string, Cenario>();
   cenarioSelecionado: string | null = null;
+  readonly perfis = new Map<string, PerfilThrottling>();
+  extensoes: ExtensaoAtiva[] = [];
+  /** Histórico: o registro de cada execução e, se houver, o resultado completo. */
+  historico: RegistroExecucao[] = [];
+  readonly resultados = new Map<string, ResultadoSessao>();
+  configuracao: ConfiguracaoArmazenamento = CONFIGURACAO_PADRAO;
   private readonly ouvintes = new Set<(visao: VisaoSessao) => void>();
 
   override async enviar(comando: ComandoInterface): Promise<RespostaComando> {
@@ -317,6 +350,43 @@ export class PonteSimulada extends PonteExtensao {
 
   override async selecionarCenario(nome: string | null): Promise<void> {
     this.cenarioSelecionado = nome;
+  }
+
+  override async listarPerfis(): Promise<PerfilThrottling[]> {
+    return [...this.perfis.values()].sort((a, b) => a.nome.localeCompare(b.nome));
+  }
+
+  override async salvarPerfil(perfil: PerfilThrottling): Promise<void> {
+    this.perfis.set(perfil.nome, perfil);
+  }
+
+  override async removerPerfil(nome: string): Promise<void> {
+    this.perfis.delete(nome);
+  }
+
+  override async outrasExtensoes(): Promise<ExtensaoAtiva[]> {
+    return this.extensoes;
+  }
+
+  override async listarHistorico(): Promise<RegistroExecucao[]> {
+    return [...this.historico].sort((a, b) => b.inicio - a.inicio);
+  }
+
+  override async lerResultado(id: string): Promise<ResultadoSessao | null> {
+    return this.resultados.get(id) ?? null;
+  }
+
+  override async removerExecucao(id: string): Promise<void> {
+    this.historico = this.historico.filter((registro) => registro.id !== id);
+    this.resultados.delete(id);
+  }
+
+  override async lerConfiguracaoArmazenamento(): Promise<ConfiguracaoArmazenamento> {
+    return this.configuracao;
+  }
+
+  override async salvarConfiguracaoArmazenamento(configuracao: ConfiguracaoArmazenamento): Promise<void> {
+    this.configuracao = configuracao;
   }
 
   /** Publica uma visão, como o service worker faria. */

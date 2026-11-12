@@ -48,10 +48,77 @@ Um cenário é um arquivo JSON, versionável e editável à mão, que descreve o
 | `passos` | sim | Lista de passos, com ao menos um. |
 | `descricao` | não | Texto livre. |
 | `execucao.iteracoes` | não | Inteiro maior que zero. Sem ele vale o padrão de 5. O valor informado na confirmação tem prioridade. |
-| `execucao.throttling` | não | Nome de um perfil (`"padrao"`) ou um objeto `{ "cpu": 4, "rede": { "latencia_ms", "download_kbps", "upload_kbps" } }`. Nesta fase é só registrado no resultado; passa a ser aplicado na fase 5. |
+| `execucao.throttling` | não | Nome de um perfil (`"nenhum"`, `"padrao"` ou um perfil salvo na extensão) ou um objeto `{ "cpu": 4, "rede": { "latencia_ms", "download_kbps", "upload_kbps" } }`. Ver "Condições de teste". |
+| `execucao.manter_cache` | não | Com `true`, o cache HTTP fica ligado durante a execução. Padrão: `false` (desligado). |
 | `aquecimento` | não | Passos de ação executados uma vez antes dos `passos`. O que acontece neles não entra no resultado. |
-| `sessao.url_login` | não | URL da tela de login da aplicação. Reservado para a fase 5. |
-| `limpar_storage` | não | Tipos de storage a limpar: `cookies`, `local_storage`, `session_storage`, `indexeddb`, `cache_storage`. Reservado para a fase 5; sem o campo nada é apagado. |
+| `sessao.url_login` | não | URL da tela de login da aplicação. Com ela, um redirecionamento para o login é tratado como falha de sessão. Ver "Sessão da aplicação". |
+| `sessao.passos_login` | não | Passos de ação que autenticam, executados na preparação se a aplicação pedir o login. Exige `url_login`. |
+| `limpar_storage` | não | Tipos de storage a apagar antes da execução: `cookies`, `local_storage`, `session_storage`, `indexeddb`, `cache_storage`. Sem o campo nada é apagado; com ele, a extensão exige uma confirmação específica. |
+
+## Condições de teste
+
+Para que duas execuções sejam comparáveis, a extensão fixa as condições antes do aquecimento e as desfaz ao terminar, inclusive em erro e cancelamento.
+
+- **Throttling** (`execucao.throttling`):
+  - `"nenhum"` (ou o campo ausente): sem limitação.
+  - `"padrao"`: CPU 4 vezes mais lenta; rede com 150 ms de latência, 1600 kbps de download e 750 kbps de upload (4G lenta).
+  - o nome de um perfil salvo em "Perfis de throttling", no side panel;
+  - valores no próprio cenário: `{ "cpu": 6, "rede": { "latencia_ms": 300, "download_kbps": 400, "upload_kbps": 200 } }`. Todos os campos são opcionais; taxa ausente ou zero é "sem limite".
+  - Um nome de perfil que não existe impede a execução, e a mensagem lista os disponíveis.
+- **Cache**: antes de cada execução o cache HTTP do navegador e o Cache Storage da origem são limpos, e a URL inicial é carregada de novo. Durante a execução o cache HTTP fica desligado para a aba, a não ser com `"manter_cache": true`.
+- O resultado registra os valores numéricos aplicados (fator de CPU, latência, taxas) e o estado do cache, não só o nome do perfil.
+- A limitação de rede pode não alcançar WebSockets nem as requisições de um service worker da página.
+
+Na sessão manual nada disso é aplicado, a menos que você escolha um perfil de throttling na confirmação.
+
+## Sessão da aplicação
+
+A análise não desloga você: cookies, `localStorage`, `sessionStorage` e IndexedDB da aplicação nunca são apagados por padrão. A limpeza de cache descrita acima não toca neles.
+
+### `limpar_storage`
+
+Só com este campo a extensão apaga dados da aplicação, e só os tipos listados. Antes de executar, a confirmação mostra quais tipos serão apagados e de qual origem, e exige que você marque a confirmação; sem ela a execução não começa e nada é apagado. Apagar `cookies` ou o storage em que a aplicação guarda o token desloga o usuário.
+
+### Sessão expirada
+
+Com `sessao.url_login`, a extensão percebe quando a aplicação leva a aba para a tela de login no meio da execução. A execução para, o resultado indica **falha de sessão** e a iteração em que ocorreu, e nenhuma estatística é apresentada: não é um resultado de performance.
+
+`url_login` é um prefixo (`"http://localhost:4200/login"` casa também com `/login?voltar=...`) ou um padrão com `*` (`"https://sso.exemplo.com/*/login*"`). Um padrão que começa com `/` é comparado só com o caminho. Sem o campo, a detecção fica desligada, e a confirmação avisa.
+
+### Login declarado
+
+A extensão só autentica se o cenário declarar `sessao.passos_login`, uma lista de passos de ação. Eles rodam uma vez, na preparação, e só se a URL inicial cair na tela de login; depois a URL inicial é aberta de novo. Termine os passos com um `esperar` por um elemento da aplicação já autenticada, para que o login tenha acabado antes da recarga. Se a sessão expirar no meio da execução, o resultado é falha de sessão: o login não é refeito.
+
+```json
+{
+  "versao_esquema": 1,
+  "nome": "painel-autenticado",
+  "url_inicial": "http://localhost:4200/painel",
+  "execucao": { "iteracoes": 10, "throttling": "padrao" },
+  "sessao": {
+    "url_login": "http://localhost:4200/login",
+    "passos_login": [
+      { "tipo": "digitar", "seletor": "[data-testid='usuario']", "texto": "usuario-de-teste" },
+      { "tipo": "digitar", "seletor": "[data-testid='senha']", "texto": "senha-de-teste" },
+      { "tipo": "clicar", "seletor": "[data-testid='entrar']" },
+      { "tipo": "esperar", "seletor": "[data-testid='painel']" }
+    ]
+  },
+  "limpar_storage": ["local_storage"],
+  "passos": [
+    {
+      "tipo": "repetir",
+      "vezes": "iteracoes",
+      "passos": [
+        { "tipo": "clicar", "seletor": "[data-testid='atualizar']" },
+        { "tipo": "aguardar_inatividade" }
+      ]
+    }
+  ]
+}
+```
+
+A extensão não guarda credenciais: os textos digitados nos passos de login aparecem como `***` no histórico e no estado da sessão. Eles continuam no arquivo do cenário e na cópia salva na extensão (`chrome.storage.local`), sob sua responsabilidade; use uma conta de teste.
 
 ## Passos
 
@@ -120,6 +187,7 @@ A verificação "DOM e listeners" não depende de passos do cenário: com ela ma
 - `seletor` é obrigatório em `clicar` e `digitar`.
 - `vezes` maior que zero, ou `"iteracoes"`.
 - `rotulo` único entre os snapshots; o erro aponta os dois passos.
+- `sessao.passos_login` exige `sessao.url_login` e só aceita passos de ação.
 - `em_erro` restrito a `interromper`, `pular` e `repetir`.
 - Campos desconhecidos e tipos de passo fora da lista são rejeitados.
 - JSON malformado é rejeitado com a linha e a coluna do erro.

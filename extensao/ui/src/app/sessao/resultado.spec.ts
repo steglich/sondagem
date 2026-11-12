@@ -108,7 +108,7 @@ describe('Resultado', () => {
       expect(texto('resultado-desfecho')).toBe('Concluída');
       expect(texto('cenario-nome')).toBe('abrir-fechar');
       expect(texto('cenario-passos')).toBe('39');
-      expect(texto('cenario-throttling')).toBe('padrao (registrado, não aplicado nesta versão)');
+      expect(texto('condicoes-throttling')).toBe('padrao (CPU 4× mais lenta; rede com 150 ms de latência, download de 1600 kbps e upload de 750 kbps)');
       expect(texto('cenario-versao-build')).toBe('1.4.2');
       expect(texto('ambiente-versao')).toBe('158.0.8127.18');
       expect(texto('ambiente-janela')).toBe('1280 × 720');

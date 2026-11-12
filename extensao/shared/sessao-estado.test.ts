@@ -20,7 +20,7 @@ function ativa(): EstadoSessao {
 
 describe('máquina de estados da sessão', () => {
   it('começa ociosa e sem resultado', () => {
-    expect(estadoInicial()).toEqual({ fase: 'ociosa', sessao: null, resultado: null });
+    expect(estadoInicial()).toEqual({ fase: 'ociosa', sessao: null, resultado: null, idResultado: null });
   });
 
   it('inicia uma sessão manual a partir de ociosa', () => {

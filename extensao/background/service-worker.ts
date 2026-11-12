@@ -12,6 +12,10 @@ import {
   type MensagemDaPagina,
   NOME_PORTA_PAGINA,
 } from '../shared/types.ts';
+import { outrasExtensoesAtivas } from '../shared/extensoes.ts';
+import { lerConfiguracao } from '../storage/configuracao.ts';
+import { listarPerfis } from '../storage/perfis.ts';
+import { criarRepositorio } from '../storage/repository.ts';
 import { type TransporteCdp, criarConexaoCdp } from './cdp.ts';
 import { criarOrquestrador } from './sessao.ts';
 
@@ -99,6 +103,15 @@ const orquestrador = criarOrquestrador({
     } catch {
       return false;
     }
+  },
+  repositorio: criarRepositorio(),
+  lerPerfis: () => listarPerfis(chrome.storage.local),
+  lerConfiguracao: () => lerConfiguracao(chrome.storage.local),
+  // Só o nome e o estado de cada extensão são lidos, para registrar no resultado.
+  outrasExtensoes: async () => outrasExtensoesAtivas(await chrome.management.getAll(), chrome.runtime.id),
+  navegador() {
+    const userAgent = navigator.userAgent;
+    return { versao: /Chrom(?:e|ium)\/([\d.]+)/.exec(userAgent)?.[1] ?? 'desconhecida', userAgent };
   },
 });
 

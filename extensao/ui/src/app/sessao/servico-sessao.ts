@@ -43,9 +43,10 @@ export class ServicoSessao {
     void this.comando({ tipo: 'obter-visao' }).catch(() => undefined);
   }
 
-  /** Com `cenario`, executa o cenário; sem ele, inicia uma sessão manual. */
-  iniciar(idAba: number, selecao: Selecao, cenario?: PedidoCenario): Promise<RespostaComando> {
-    return this.comando({ tipo: 'iniciar', idAba, selecao, ...(cenario ? { cenario } : {}) });
+  /** Com `cenario`, executa o cenário; sem ele, inicia uma sessão manual, com o throttling escolhido (se houver). */
+  iniciar(idAba: number, selecao: Selecao, cenario?: PedidoCenario, throttling?: string): Promise<RespostaComando> {
+    // O throttling escolhido na confirmação só vale na sessão manual; em cenário, vem da definição.
+    return this.comando({ tipo: 'iniciar', idAba, selecao, ...(cenario ? { cenario } : throttling ? { throttling } : {}) });
   }
 
   parar(): Promise<RespostaComando> {

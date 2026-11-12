@@ -97,9 +97,9 @@ export interface Cenario {
   nome: string;
   descricao?: string;
   url_inicial: string;
-  execucao?: { iteracoes?: number; throttling?: Throttling };
+  execucao?: { iteracoes?: number; throttling?: Throttling; manter_cache?: boolean };
   aquecimento?: PassoDeAcao[];
-  sessao?: { url_login?: string };
+  sessao?: { url_login?: string; passos_login?: PassoDeAcao[] };
   limpar_storage?: TipoStorage[];
   passos: Passo[];
 }
@@ -203,10 +203,17 @@ function percorrer(passos: unknown, caminho: string, visitar: (passo: Record<str
   });
 }
 
-/** Regras que o schema não expressa bem: `vezes` válido e rótulos de snapshot únicos. */
+/** Regras que o schema não expressa bem: `vezes` válido, rótulos de snapshot únicos e login com `url_login`. */
 export function checagemComplementar(valor: unknown): ErroValidacao[] {
   if (!ehObjeto(valor)) return [];
   const erros: ErroValidacao[] = [];
+  const sessao = valor['sessao'];
+  if (ehObjeto(sessao) && 'passos_login' in sessao && typeof sessao['url_login'] !== 'string') {
+    erros.push({
+      caminho: '/sessao/url_login',
+      mensagem: '"passos_login" exige "url_login": é ela que diz quando a aplicação pediu o login.',
+    });
+  }
   const rotulos = new Map<string, string[]>();
 
   percorrer(valor['passos'], '/passos', (passo, caminho) => {
@@ -359,6 +366,31 @@ export function temPassoDe(passos: readonly Passo[], verificacao: IdVerificacao)
   return passos.some((passo) =>
     passo.tipo === 'repetir' ? temPassoDe(passo.passos, verificacao) : ehMedicao(passo) && VERIFICACAO_DO_PASSO[passo.tipo] === verificacao,
   );
+}
+
+/** Texto que substitui o que foi digitado nos passos de login em tudo o que é gravado. */
+export const TEXTO_MASCARADO = '***';
+
+/**
+ * Cópia do cenário sem os textos digitados nos passos de login. É esta cópia que vai
+ * para o estado da sessão e para o histórico: as credenciais ficam só no arquivo do cenário.
+ */
+export function mascararCenario(cenario: Cenario): Cenario {
+  const passos = cenario.sessao?.passos_login;
+  if (!passos) return cenario;
+  return {
+    ...cenario,
+    sessao: {
+      ...cenario.sessao,
+      passos_login: passos.map((passo) => (passo.tipo === 'digitar' ? { ...passo, texto: TEXTO_MASCARADO } : passo)),
+    },
+  };
+}
+
+/** Tipos de `limpar_storage` que apagam dados de sessão: só saem com confirmação específica. */
+export function storageAConfirmar(cenario: Pick<Cenario, 'limpar_storage'>): TipoStorage[] {
+  // O Cache Storage já é limpo antes de toda execução e não guarda a sessão do usuário.
+  return [...new Set(cenario.limpar_storage ?? [])].filter((tipo) => tipo !== 'cache_storage');
 }
 
 /** Texto curto do throttling para a confirmação e o resultado. */

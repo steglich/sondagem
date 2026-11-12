@@ -6,6 +6,8 @@ import {
   type Passo,
   analisarTextoCenario,
   filtrarPassosDeMedicao,
+  mascararCenario,
+  storageAConfirmar,
   temPassoDe,
   resolverIteracoes,
   resolverVezes,
@@ -265,7 +267,17 @@ describe('documentação e validador gerado', () => {
     expect(JSON.parse(blocos[0]!)).toEqual(exemplo());
   });
 
-  it.each(['abrir-fechar', 'vazamento-listener', 'vazamento-dom', 'limpa-memoria', 'cpu-pesada'])('o cenário %s da página de teste é válido', (nome) => {
+  it.each([
+    'abrir-fechar',
+    'vazamento-listener',
+    'vazamento-dom',
+    'limpa-memoria',
+    'cpu-pesada',
+    'sessao-preservada',
+    'sessao-expira',
+    'limpar-storage',
+    'login-declarado',
+  ])('o cenário %s da página de teste é válido', (nome) => {
     const texto = readFileSync(new URL(`../../pagina-teste/cenarios/${nome}.json`, import.meta.url), 'utf8');
     expect(analisarTextoCenario(texto)).toMatchObject({ ok: true, cenario: { nome } });
   });
@@ -284,5 +296,67 @@ describe('documentação e validador gerado', () => {
 
   it('o validador versionado está em dia com o schema', async () => {
     expect(readFileSync(ARQUIVO_VALIDADOR, 'utf8')).toBe(await gerarValidador());
+  });
+});
+
+describe('sessão e condições', () => {
+  const base = (): Cenario => ({
+    versao_esquema: 1,
+    nome: 'com-login',
+    url_inicial: 'http://localhost:4300/protegida',
+    passos: [{ tipo: 'clicar', seletor: '#a' }],
+  });
+
+  it('aceita `passos_login` com `url_login`, e `manter_cache`', () => {
+    const cenario = {
+      ...base(),
+      execucao: { manter_cache: true, throttling: { cpu: 6, rede: { latencia_ms: 300 } } },
+      sessao: { url_login: '/login', passos_login: [{ tipo: 'digitar', seletor: '#senha', texto: 'x' }] },
+    };
+    expect(validarCenario(cenario)).toMatchObject({ ok: true });
+  });
+
+  it('`passos_login` sem `url_login` é erro, apontando o campo que falta', () => {
+    const resultado = validarCenario({ ...base(), sessao: { passos_login: [{ tipo: 'clicar', seletor: '#entrar' }] } });
+    expect(resultado).toEqual({
+      ok: false,
+      erros: [{ caminho: '/sessao/url_login', mensagem: '"passos_login" exige "url_login": é ela que diz quando a aplicação pediu o login.' }],
+    });
+  });
+
+  it('os passos de login são passos de ação: medição e `repetir` são rejeitados', () => {
+    const resultado = validarCenario({ ...base(), sessao: { url_login: '/login', passos_login: [{ tipo: 'forcar_gc' }] } });
+    expect(resultado.ok).toBe(false);
+    expect(validarCenario({ ...base(), sessao: { url_login: '/login', passos_login: [] } }).ok).toBe(false);
+  });
+
+  it('mascara só o texto digitado nos passos de login, em uma cópia', () => {
+    const cenario: Cenario = {
+      ...base(),
+      sessao: {
+        url_login: '/login',
+        passos_login: [
+          { tipo: 'digitar', seletor: '#senha', texto: 'segredo', limpar: true },
+          { tipo: 'clicar', seletor: '#entrar' },
+        ],
+      },
+      passos: [{ tipo: 'digitar', seletor: '#busca', texto: 'termo da busca' }],
+    };
+    const mascarado = mascararCenario(cenario);
+    expect(mascarado.sessao?.passos_login).toEqual([
+      { tipo: 'digitar', seletor: '#senha', texto: '***', limpar: true },
+      { tipo: 'clicar', seletor: '#entrar' },
+    ]);
+    // O que se digita nos passos comuns faz parte do cenário medido e fica.
+    expect(mascarado.passos).toEqual(cenario.passos);
+    expect(JSON.stringify(mascarado)).not.toContain('segredo');
+    expect(cenario.sessao?.passos_login?.[0]).toMatchObject({ texto: 'segredo' });
+    expect(mascararCenario(base())).toEqual(base());
+  });
+
+  it('os tipos de `limpar_storage` que pedem confirmação: todos, menos o Cache Storage, sem repetição', () => {
+    expect(storageAConfirmar(base())).toEqual([]);
+    expect(storageAConfirmar({ limpar_storage: ['cache_storage'] })).toEqual([]);
+    expect(storageAConfirmar({ limpar_storage: ['local_storage', 'cache_storage', 'cookies', 'local_storage'] })).toEqual(['local_storage', 'cookies']);
   });
 });

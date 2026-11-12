@@ -1,0 +1,20 @@
+{
+  "versao_esquema": 1,
+  "nome": "sessao-expira",
+  "descricao": "A sessão da página protegida expira ao fim do terceiro ciclo: a execução tem de parar com falha de sessão.",
+  "url_inicial": "http://localhost:4300/protegida?expira=3",
+  "execucao": { "iteracoes": 5 },
+  "sessao": { "url_login": "http://localhost:4300/login" },
+  "passos": [
+    {
+      "tipo": "repetir",
+      "vezes": "iteracoes",
+      "passos": [
+        { "tipo": "clicar", "seletor": "[data-testid='abrir-componente']" },
+        { "tipo": "esperar", "seletor": "#area .componente" },
+        { "tipo": "clicar", "seletor": "[data-testid='fechar-componente']" },
+        { "tipo": "aguardar_inatividade", "ms": 300 }
+      ]
+    }
+  ]
+}

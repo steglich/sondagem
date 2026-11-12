@@ -52,5 +52,6 @@ export function andamentoInicial(totalIteracoes: number): AndamentoExecucao {
     passosExecutados: 0,
     falhas: [],
     ambiente: null,
+    falhaDeSessao: null,
   };
 }

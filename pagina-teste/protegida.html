@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Protegida · Página de teste</title>
+    <link rel="stylesheet" href="/estilo.css" />
+    <script type="module" src="/protegida.ts"></script>
+  </head>
+  <body>
+    <p><a href="/" data-testid="voltar-indice">← Casos</a></p>
+    <h1>Página protegida</h1>
+    <p>
+      Só abre com o cookie de sessão do <a href="/login" data-testid="ir-para-login">login simulado</a>; sem ele, o servidor
+      redireciona para o login. Usuário: <strong data-testid="usuario-logado">—</strong>.
+    </p>
+    <p>
+      Com <code>?expira=N</code> na URL, a sessão expira ao fim do ciclo N: o cookie é apagado e a página recarrega, o que
+      leva ao login.
+    </p>
+    <button type="button" data-testid="abrir-componente">Abrir</button>
+    <button type="button" data-testid="fechar-componente">Fechar</button>
+    <button type="button" data-testid="sair">Sair</button>
+    <div id="area"></div>
+  </body>
+</html>

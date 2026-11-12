@@ -16,6 +16,9 @@ export default defineConfig({
     { name: 'pagina-teste', testMatch: 'pagina-teste/**/*.spec.ts' },
     // Requer `npm run build` antes: carrega dist/extensao/.
     { name: 'extensao', testMatch: 'extensao/**/*.spec.ts' },
+    // Comparações de tempo (variação entre execuções, impacto do painel): só depois dos
+    // outros projetos, para não medir a carga dos testes que rodam em paralelo.
+    { name: 'medicao', testMatch: 'medicao/**/*.spec.ts', dependencies: ['pagina-teste', 'extensao'] },
   ],
   webServer: {
     command: 'npm run pagina-teste',

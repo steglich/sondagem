@@ -7,7 +7,7 @@
  *   interface ──(runtime.sendMessage: ComandoInterface → RespostaComando)──▶ service worker
  *   interface ◀─(runtime.sendMessage: EventoParaInterface)── service worker
  */
-import type { Cenario, Throttling } from './cenario.ts';
+import type { Cenario, Throttling, TipoStorage } from './cenario.ts';
 import type { Resumo } from './stats.ts';
 
 // ---------------------------------------------------------------------------
@@ -320,12 +320,58 @@ export type TipoAnalise = 'sessao-manual' | 'cenario';
 /** `erro`: um passo do cenário falhou e interrompeu a execução. */
 export type Desfecho = 'concluida' | 'cancelada' | 'interrompida' | 'erro';
 
-export type TipoRecurso = 'script-registrado' | 'observador' | 'listener' | 'porta' | 'temporizador' | 'depurador';
+export type TipoRecurso =
+  | 'script-registrado'
+  | 'observador'
+  | 'listener'
+  | 'porta'
+  | 'temporizador'
+  | 'depurador'
+  /** Throttling de CPU, de rede ou cache desligado, desfeitos na restauração. */
+  | 'condicao-de-teste';
 
 /** Uma linha da "lista do que foi removido" exibida depois da limpeza. */
 export interface ItemLimpeza {
   recurso: TipoRecurso;
   quantidade: number;
+}
+
+// ---------------------------------------------------------------------------
+// Condições de teste
+// ---------------------------------------------------------------------------
+
+/** Limitação de rede. Taxa `null`: sem limite. */
+export interface CondicoesRede {
+  latenciaMs: number;
+  downloadKbps: number | null;
+  uploadKbps: number | null;
+}
+
+/** Condições que de fato valeram em uma análise, em números (não só o nome do perfil). */
+export interface CondicoesDeTeste {
+  /** `nenhum`, `padrao`, o nome de um perfil salvo, ou `personalizado` (valores declarados no cenário). */
+  perfil: string;
+  /** Fator de desaceleração da CPU; 1 é sem limitação. */
+  cpu: number;
+  /** `null`: rede sem limitação. */
+  rede: CondicoesRede | null;
+  /** Cache HTTP desligado para a aba durante a análise. */
+  cacheDesligado: boolean;
+  /** Cache HTTP e Cache Storage da origem limpos antes da análise. */
+  cacheLimpo: boolean;
+  /** Tipos de storage apagados a pedido do cenário, depois da confirmação. Vazio: nada foi apagado. */
+  storageLimpo: TipoStorage[];
+}
+
+/** Outra extensão ativa no perfil do navegador durante a análise. */
+export interface ExtensaoAtiva {
+  id: string;
+  nome: string;
+}
+
+export interface Navegador {
+  versao: string;
+  userAgent: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +431,16 @@ export interface ErroDePasso {
   motivo: string;
   /** O que a política `em_erro` fez com a falha. */
   acao: 'interrompeu' | 'pulou';
+  /** `true` se a aplicação redirecionou para o login: é falha de sessão, não de performance. */
+  falhaDeSessao?: boolean;
+}
+
+/** A aplicação pediu o login no meio da execução. */
+export interface FalhaDeSessao {
+  /** URL de login para onde a aba foi levada. */
+  url: string;
+  /** Iteração em que ocorreu, ou `null` fora das iterações. */
+  iteracao: number | null;
 }
 
 export interface Ambiente {
@@ -416,6 +472,8 @@ export interface AndamentoExecucao {
   /** Passos que falharam, na ordem. O que interrompeu a execução, se houve, é o último. */
   falhas: ErroDePasso[];
   ambiente: Ambiente | null;
+  /** Preenchido quando a execução parou por sessão expirada. */
+  falhaDeSessao: FalhaDeSessao | null;
 }
 
 export type IdMetricaIteracao = 'duracao-iteracao' | 'tempo-long-tasks' | 'pior-interacao';
@@ -434,6 +492,8 @@ export interface ResultadoCenario {
   iteracoesIncompletas: number;
   passosExecutados: number;
   falhas: ErroDePasso[];
+  /** Com falha de sessão não há estatística válida: `estatisticas` fica vazia. */
+  falhaDeSessao: FalhaDeSessao | null;
   /** Mediana, p75 e p95 entre as iterações completas. */
   estatisticas: EstatisticaMetrica[];
 }
@@ -444,9 +504,13 @@ export interface PedidoCenario {
   /** Iterações informadas na confirmação; tem prioridade sobre o cenário. */
   iteracoes?: number | null;
   versaoBuild?: string | null;
+  /** Tipos de `limpar_storage` que o usuário confirmou na tela. Sem todos eles, a execução não começa. */
+  storageConfirmado?: TipoStorage[];
 }
 
 export interface SessaoEmAndamento {
+  /** Identifica a análise no histórico. */
+  id: string;
   tipo: TipoAnalise;
   idAba: number;
   url: string;
@@ -460,11 +524,15 @@ export interface SessaoEmAndamento {
   usaDebugger: boolean;
   /** Preenchido quando o debugger foi desanexado por ação externa. */
   conexaoPerdida: MotivoDesconexao | null;
-  /** Só em execuções de cenário. */
+  condicoes: CondicoesDeTeste;
+  extensoes: ExtensaoAtiva[];
+  navegador: Navegador | null;
+  /** Só em execuções de cenário. A definição vem sem os textos digitados no login. */
   cenario: { definicao: Cenario; configuracao: ConfiguracaoExecucao; andamento: AndamentoExecucao } | null;
 }
 
 export interface ResultadoSessao {
+  id: string;
   tipo: TipoAnalise;
   desfecho: Desfecho;
   url: string;
@@ -479,14 +547,27 @@ export interface ResultadoSessao {
   conexaoPerdida: MotivoDesconexao | null;
   cenario: ResultadoCenario | null;
   memoria: AnaliseMemoria | null;
+  condicoes: CondicoesDeTeste;
+  /** Outras extensões ativas no início da análise. */
+  extensoes: ExtensaoAtiva[];
+  navegador: Navegador | null;
+  /** Listas detalhadas removidas para caber no limite de armazenamento. Vazio: nada foi removido. */
+  truncado: ListaTruncavel[];
 }
 
-/** Estado gravado pelo service worker em `chrome.storage.session`. */
+/** Listas de `DadosColetados` que o truncamento pode remover. As estatísticas nunca saem. */
+export type ListaTruncavel = 'longTasks' | 'interacoes' | 'errosPagina' | 'documentos' | 'snapshots' | 'funcoesCpu';
+
+/**
+ * Estado da sessão no service worker. Em `chrome.storage.session` fica sem o
+ * `resultado`: ele mora no repositório (IndexedDB) e é relido por `idResultado`.
+ */
 export interface EstadoSessao {
   fase: FaseSessao;
   sessao: SessaoEmAndamento | null;
-  /** Resultado da última análise terminada. Fica só aqui até a fase 5 (histórico). */
+  /** Resultado da última análise terminada. Só em memória. */
   resultado: ResultadoSessao | null;
+  idResultado: string | null;
 }
 
 /** Recorte do estado enviado à interface. */
@@ -547,7 +628,8 @@ export type MensagemDaPagina =
 
 export type ComandoInterface =
   | { tipo: 'obter-visao' }
-  | { tipo: 'iniciar'; idAba: number; selecao: Selecao; cenario?: PedidoCenario }
+  /** `throttling` só vale na sessão manual: é a escolha feita na confirmação. Em cenário, vem da definição. */
+  | { tipo: 'iniciar'; idAba: number; selecao: Selecao; cenario?: PedidoCenario; throttling?: Throttling }
   | { tipo: 'parar' }
   | { tipo: 'cancelar' }
   /** Sessão manual com "Memória": faz um censo de objetos agora. */
@@ -559,6 +641,8 @@ export type MotivoRecusa =
   | 'sem-verificacao'
   | 'url-nao-suportada'
   | 'cenario-invalido'
+  | 'perfil-inexistente'
+  | 'limpeza-nao-confirmada'
   | 'debugger'
   | 'snapshot'
   | 'erro';

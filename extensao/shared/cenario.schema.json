@@ -41,7 +41,7 @@
           ],
           "pattern": "\\S",
           "additionalProperties": false,
-          "description": "Nome de um perfil (ex.: \"padrao\") ou valores personalizados. Registrado no resultado; aplicado a partir da fase 5.",
+          "description": "Nome de um perfil (\"nenhum\", \"padrao\" ou um perfil salvo na extensão) ou valores personalizados. Aplicado antes do aquecimento e desfeito ao fim da execução.",
           "properties": {
             "cpu": {
               "type": "number",
@@ -67,6 +67,10 @@
               }
             }
           }
+        },
+        "manter_cache": {
+          "type": "boolean",
+          "description": "Com true, o cache HTTP fica ligado durante a execução. Padrão: false (cache desligado). A limpeza de cache antes da execução acontece sempre."
         }
       }
     },
@@ -83,7 +87,16 @@
       "properties": {
         "url_login": {
           "type": "string",
-          "pattern": "\\S"
+          "pattern": "\\S",
+          "description": "Prefixo da URL de login, ou padrão com *. Um redirecionamento para ela durante a execução é falha de sessão."
+        },
+        "passos_login": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/passo_de_acao"
+          },
+          "description": "Passos de ação executados na preparação se a URL inicial cair na tela de login. Exige url_login. Os textos digitados não são gravados em resultados."
         }
       }
     },

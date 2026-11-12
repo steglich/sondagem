@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Login simulado · Página de teste</title>
+    <link rel="stylesheet" href="/estilo.css" />
+    <script type="module" src="/login.ts"></script>
+  </head>
+  <body>
+    <p><a href="/" data-testid="voltar-indice">← Casos</a></p>
+    <h1>Login simulado</h1>
+    <p>
+      Entrar grava o cookie de sessão e uma preferência no <code>localStorage</code>, e leva à página protegida. Não há
+      senha de verdade: qualquer valor serve.
+    </p>
+    <p>
+      <label>Usuário <input type="text" data-testid="campo-usuario" autocomplete="off" /></label>
+    </p>
+    <p>
+      <label>Senha <input type="password" data-testid="campo-senha" autocomplete="off" /></label>
+    </p>
+    <button type="button" data-testid="entrar">Entrar</button>
+    <p data-testid="motivo-login"></p>
+  </body>
+</html>

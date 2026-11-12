@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { inpDaAnalise, metricasDeCarregamento } from '../../../../shared/agregacao';
-import { descreverThrottling } from '../../../../shared/cenario';
+import { descreverCondicoes } from '../../../../shared/condicoes';
+import { descreverStorage } from '../../../../shared/limpeza-storage';
 import { FUNCOES_EXIBIDAS, LIMITE_PERFIL_MANUAL_MS } from '../../../../shared/cpu';
 import { explicarDesconexao } from '../../../../shared/mensagens-debugger';
 import { CONSTRUTORES_EXIBIDOS, LIMITES_PADRAO } from '../../../../shared/memoria';
@@ -8,6 +9,7 @@ import { formatarBytes, formatarMs, formatarVariacaoBytes } from '../../../../sh
 import type {
   ClassificacaoVazamento,
   Desfecho,
+  ListaTruncavel,
   IdMetricaIteracao,
   MetricaMemoria,
   ResultadoSessao,
@@ -39,6 +41,16 @@ const RECURSOS: Record<TipoRecurso, string> = {
   porta: 'Conexões entre a página e a extensão',
   temporizador: 'Temporizadores',
   depurador: 'Debugger anexado à aba',
+  'condicao-de-teste': 'Condições de teste (throttling e cache) desfeitas',
+};
+
+const LISTAS: Record<ListaTruncavel, string> = {
+  longTasks: 'long tasks',
+  interacoes: 'interações',
+  errosPagina: 'erros da página',
+  documentos: 'carregamentos',
+  snapshots: 'construtores de cada snapshot',
+  funcoesCpu: 'funções do perfil de CPU',
 };
 
 const CLASSIFICACOES: Record<ClassificacaoVazamento, string> = {
@@ -83,6 +95,59 @@ const INDISPONIVEL = 'indisponível';
         }
       }
 
+      @if (falhaDeSessao(); as falha) {
+        <p class="aviso" role="alert" data-testid="resultado-falha-sessao">
+          Falha de sessão{{ falha.iteracao === null ? '' : ' na iteração ' + falha.iteracao }}: a aplicação redirecionou para a tela
+          de login (<code>{{ falha.url }}</code
+          >). Não é um resultado de performance: nenhuma estatística desta execução é válida. Entre na aplicação e execute de novo.
+        </p>
+      }
+
+      @if (truncado(); as listas) {
+        <p class="aviso" data-testid="resultado-truncado">
+          Esta análise passou do limite de armazenamento. Foram removidas as listas detalhadas de {{ listas }}; as estatísticas
+          foram calculadas antes e estão completas.
+        </p>
+      }
+
+      <h3>Condições de teste</h3>
+      <dl data-testid="resultado-condicoes">
+        <dt>Throttling</dt>
+        <dd data-testid="condicoes-throttling">{{ condicoes().perfil }} ({{ throttlingEfetivo() }})</dd>
+        <dt>CPU</dt>
+        <dd data-testid="condicoes-cpu">{{ condicoes().cpu }}×</dd>
+        @if (condicoes().rede; as rede) {
+          <dt>Latência</dt>
+          <dd data-testid="condicoes-latencia">{{ rede.latenciaMs }} ms</dd>
+          <dt>Download</dt>
+          <dd data-testid="condicoes-download">{{ rede.downloadKbps === null ? 'sem limite' : rede.downloadKbps + ' kbps' }}</dd>
+          <dt>Upload</dt>
+          <dd data-testid="condicoes-upload">{{ rede.uploadKbps === null ? 'sem limite' : rede.uploadKbps + ' kbps' }}</dd>
+        }
+        <dt>Cache</dt>
+        <dd data-testid="condicoes-cache">{{ cache() }}</dd>
+        @if (condicoes().storageLimpo.length > 0) {
+          <dt>Storage apagado</dt>
+          <dd data-testid="condicoes-storage">{{ storageLimpo() }}</dd>
+        }
+        @if (resultado().navegador; as navegador) {
+          <dt>Navegador</dt>
+          <dd data-testid="resultado-navegador">{{ navegador.versao }}</dd>
+        }
+        <dt>Outras extensões ativas</dt>
+        <dd data-testid="resultado-extensoes">{{ extensoes() }}</dd>
+      </dl>
+      @if (condicoes().rede) {
+        <p class="nota" data-testid="condicoes-limite-rede">
+          A limitação de rede pode não alcançar WebSockets nem as requisições feitas por um service worker da página.
+        </p>
+      }
+      @if (resultado().extensoes.length > 0) {
+        <p class="nota" data-testid="resultado-aviso-extensoes">
+          Outras extensões podem ter interferido na medição. Para comparar resultados, use um perfil limpo do Chrome.
+        </p>
+      }
+
       @if (perfilCpuAtivo()) {
         <p class="aviso" data-testid="resultado-perfil-cpu">
           As métricas desta análise foram coletadas com o perfil de CPU ligado, que deixa a página mais lenta. Para tempos sem
@@ -101,8 +166,6 @@ const INDISPONIVEL = 'indisponível';
           <dd data-testid="cenario-incompletas">{{ c.iteracoesIncompletas }}</dd>
           <dt>Passos executados</dt>
           <dd data-testid="cenario-passos">{{ c.passosExecutados }}</dd>
-          <dt>Throttling</dt>
-          <dd data-testid="cenario-throttling">{{ throttling() }}</dd>
           @if (c.configuracao.versaoBuild; as versao) {
             <dt>Versão do build</dt>
             <dd data-testid="cenario-versao-build">{{ versao }}</dd>
@@ -128,7 +191,7 @@ const INDISPONIVEL = 'indisponível';
           </p>
         }
 
-        @if (resultado().desfecho !== 'cancelada') {
+        @if (resultado().desfecho !== 'cancelada' && !falhaDeSessao()) {
           <h4>Resumo por iteração</h4>
           <table data-testid="estatisticas">
             <thead>
@@ -686,11 +749,22 @@ export class Resultado {
     return motivo ? explicarDesconexao(motivo) : null;
   });
 
-  protected readonly throttling = computed(() => {
-    const throttling = this.resultado().cenario?.configuracao.throttling ?? undefined;
-    const descricao = descreverThrottling(throttling);
-    // O throttling só passa a ser aplicado na fase 5; até lá o resultado diz isso.
-    return throttling === undefined ? descricao : `${descricao} (registrado, não aplicado nesta versão)`;
+  protected readonly condicoes = computed(() => this.resultado().condicoes);
+  protected readonly throttlingEfetivo = computed(() => descreverCondicoes(this.condicoes()));
+  protected readonly cache = computed(() => {
+    const { cacheLimpo, cacheDesligado } = this.condicoes();
+    if (!cacheLimpo && !cacheDesligado) return 'como estava no navegador';
+    return `${cacheLimpo ? 'limpo antes da análise' : 'não foi limpo'}; ${cacheDesligado ? 'desligado' : 'ligado'} durante`;
+  });
+  protected readonly storageLimpo = computed(() => descreverStorage(this.condicoes().storageLimpo));
+  protected readonly extensoes = computed(() => {
+    const extensoes = this.resultado().extensoes;
+    return extensoes.length === 0 ? 'nenhuma' : `${extensoes.length}: ${extensoes.map((e) => e.nome).join(', ')}`;
+  });
+  protected readonly falhaDeSessao = computed(() => this.resultado().cenario?.falhaDeSessao ?? null);
+  protected readonly truncado = computed(() => {
+    const listas = this.resultado().truncado;
+    return listas.length === 0 ? null : listas.map((lista) => LISTAS[lista]).join(', ');
   });
 
   protected readonly estatisticas = computed(() =>

@@ -33,6 +33,8 @@ npx playwright test --project extensao
 npx playwright test testes/extensao/cenario.spec.ts --project extensao -g "abrir-fechar"   # executa um cenário de ponta a ponta
 npx playwright test testes/extensao/memoria.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP no navegador
 npx playwright test testes/extensao/cpu.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP do perfil de CPU
+npx playwright test testes/extensao/condicoes.spec.ts --project extensao -g "chrome.debugger"   # confere os comandos de CDP das condições de teste
+npx playwright test --project medicao --no-deps   # só as comparações de tempo: variação entre execuções e impacto do painel
 node scripts/gerar-validador.mjs   # regenera o validador depois de mudar cenario.schema.json
 ```
 
@@ -42,20 +44,24 @@ Para carregar a extensão: `chrome://extensions` → modo de desenvolvedor → "
 
 ```
 extensao/
-  manifest.json      # MV3; permissões só as da fase atual (hoje: sidePanel, storage, scripting, tabs, debugger, <all_urls>)
+  manifest.json      # MV3; permissões só as da fase atual (hoje: sidePanel, storage, scripting, tabs, debugger, management, <all_urls>)
   background/        # service worker (TS puro, bundle ESM via esbuild); sessao.ts orquestra a sessão,
                      # cdp.ts é o wrapper do debugger, scenarios.ts é o runner de cenários
                      # memoria.ts faz as medições de memória pelo CDP
-                     # e cpu.ts coleta o perfil de CPU pelo Tracing
+                     # cpu.ts coleta o perfil de CPU pelo Tracing,
+                     # condicoes.ts aplica throttling, cache e limpezas, e efeitos.ts é a pilha de efeitos reversíveis
   injected/          # código que roda na página testada (TS puro, bundle IIFE via esbuild; entrada: entrada.ts)
   shared/            # tipos e funções puras; testes Vitest ao lado (*.test.ts)
     cenario.schema.json   # JSON Schema do cenário (versão 1); gerado/ guarda o validador compilado
-  storage/           # persistência: última seleção de verificações e cenários salvos
+  storage/           # persistência: seleção, cenários, perfis de throttling e configuração (chrome.storage.local)
+                     # e repository.ts, o histórico de resultados (IndexedDB, via idb)
   ui/                # workspace Angular: side panel (#/painel) e relatório (#/relatorio, lazy); testes *.spec.ts
 pagina-teste/        # casos controlados (HTML + TS sem framework), servidos na porta 4300; cenarios/ tem cenários de teste
+                     # /login e /protegida simulam uma aplicação autenticada (o servidor redireciona sem o cookie)
 docs/cenario.md      # formato do cenário, com exemplo (um teste valida o exemplo)
 scripts/             # build.mjs, gerar-validador.mjs, verificar-isolamento.mjs, servidor-pagina-teste.mjs
-testes/              # Playwright: extensao/ (extensão carregada) e pagina-teste/
+testes/              # Playwright: extensao/ (extensão carregada), pagina-teste/ e medicao/ (comparações de tempo;
+                     # projeto que roda depois dos outros, em série, para não medir a carga dos testes paralelos)
 dist/extensao/       # saída carregável (gerada)
 ```
 
@@ -66,6 +72,8 @@ dist/extensao/       # saída carregável (gerada)
 - O Angular escreve direto em `dist/extensao/` (`deleteOutputPath: false`); `scripts/build.mjs` limpa a pasta, copia o manifesto e gera os bundles de medição. Roteamento por hash, porque páginas de extensão não têm servidor. Não há dev server.
 - A extensão não faz nada sem comando do usuário: sem content scripts declarados, sem injeção nem debugger ao instalar ou navegar. O código de medição só entra na página entre o comando `iniciar` e o fim da sessão (content script registrado dinamicamente, removido na parada).
 - Tudo o que uma sessão instala tem de sair na limpeza e aparecer na lista do que foi removido. Na página, `extensao/injected/rastreador.ts` intercepta `PerformanceObserver` e `addEventListener` do mundo isolado para conseguir desligar também o que a `web-vitals` cria.
+- **A análise não desloga o usuário.** Nenhum caminho apaga cookies ou storage da aplicação sem passar pela confirmação: a limpeza padrão (`limparCache`) só aceita cache HTTP e Cache Storage, e `limparStorage` só aceita um `TiposConfirmados` (`extensao/shared/limpeza-storage.ts`).
+- **Toda condição aplicada é desfeita.** Throttling e cache entram pela pilha de `extensao/background/efeitos.ts` e saem na restauração, na ordem inversa, inclusive em erro e cancelamento; aparecem na limpeza como `condicao-de-teste`.
 - `chrome.*` fica nas bordas: `extensao/background/service-worker.ts`, `extensao/injected/entrada.ts` e `extensao/ui/src/app/sessao/ponte.ts`. O resto recebe essas dependências por parâmetro e é testado sem navegador. `chrome.debugger` só aparece no `transporteCdp` de `service-worker.ts`.
 - **Debugger só durante a análise.** Ele é anexado depois da confirmação, e só se a análise exigir (execução de cenário ou verificação com `exige: 'debugger'`), e sai sempre no fim, inclusive em erro, cancelamento e conexão perdida. A extensão nunca disputa a aba: se já houver outro depurador (DevTools, outra extensão), a análise não começa.
 - O código de medição e a página de teste não são minificados, para que nomes de função (ex.: `calculoPesado`) apareçam nos perfis de CPU.
@@ -85,9 +93,9 @@ página (injected.js, mundo isolado)        service worker                      
 ```
 
 - **Página → service worker**: `extensao/injected/sessao-pagina.ts` abre a porta e só instala os observadores depois de receber `configurar`; sem essa mensagem (não há sessão para a aba) o script termina sem instalar nada. `extensao/injected/observers.ts` coleta long tasks e interações, `extensao/injected/vitals.ts` liga a `web-vitals`, e `extensao/injected/lotes.ts` envia um lote por segundo, nunca um evento por mensagem.
-- **Service worker**: `extensao/background/sessao.ts` valida a aba, registra o content script, agrega os lotes (`extensao/shared/agregacao.ts`) e grava o estado em `chrome.storage.session` (chave `sondagem:sessao`). As transições estão em `extensao/shared/sessao-estado.ts` (ociosa → ativa → parando → ociosa); só existe uma sessão por vez. Ao acordar e em `tabs.onRemoved`, uma sessão cuja aba sumiu é encerrada como interrompida, com os dados já recebidos.
+- **Service worker**: `extensao/background/sessao.ts` valida a aba, registra o content script, agrega os lotes (`extensao/shared/agregacao.ts`) e grava o estado em `chrome.storage.session` (chave `sondagem:sessao`). O resultado não fica lá: vai para o histórico, e o estado guarda só o `idResultado` (ver "Histórico"). As transições estão em `extensao/shared/sessao-estado.ts` (ociosa → ativa → parando → ociosa); só existe uma sessão por vez. Ao acordar e em `tabs.onRemoved`, uma sessão cuja aba sumiu é encerrada como interrompida, com os dados já recebidos.
 - **Service worker → interface**: durante a análise vai só o status resumido, limitado a uma publicação por segundo por `extensao/shared/limitador.ts`; os registros detalhados vão apenas no resultado. A interface aplica o mesmo limite em `extensao/ui/src/app/sessao/servico-sessao.ts`.
-- **Interface**: `extensao/ui/src/app/painel/painel.ts` alterna entre confirmação, sessão ativa e resultado (componentes em `extensao/ui/src/app/sessao/`); ocioso, mostra também a tela de cenários (`extensao/ui/src/app/cenarios/`). Com um cenário escolhido, a confirmação oferece os modos "Cenário" e "Sessão manual". O painel aberto em aba própria aceita `index.html?aba=<id>#/painel` para indicar a aba alvo; os testes de integração usam esse caminho, porque o Playwright não abre o side panel.
+- **Interface**: `extensao/ui/src/app/painel/painel.ts` alterna entre confirmação, sessão ativa e resultado (componentes em `extensao/ui/src/app/sessao/`); ocioso, mostra também as telas de cenários (`extensao/ui/src/app/cenarios/`), de perfis de throttling (`perfis/`) e do histórico (`historico/`). Com um cenário escolhido, a confirmação oferece os modos "Cenário" e "Sessão manual". O painel aberto em aba própria aceita `index.html?aba=<id>#/painel` para indicar a aba alvo; os testes de integração usam esse caminho, porque o Playwright não abre o side panel.
 
 ## Cenários, debugger e runner
 
@@ -95,7 +103,7 @@ O formato do cenário está em `docs/cenario.md`. O fluxo de uma execução:
 
 1. **Validação** (`extensao/shared/cenario.ts`): o validador gerado confere a estrutura contra `cenario.schema.json`, e `checagemComplementar` cobre o que o schema não expressa (`vezes`, rótulos de snapshot únicos). Os erros saem como caminho JSON Pointer mais mensagem em português; JSON malformado sai com linha e coluna. A interface valida ao salvar e o service worker valida de novo antes de executar. Depois de mudar o schema, rode `node scripts/gerar-validador.mjs` (o arquivo gerado é versionado, e um teste falha se estiver desatualizado).
 2. **Conexão** (`extensao/background/cdp.ts`): `criarConexaoCdp(transporte)` expõe `anexar`, `enviar`, `aoEvento`, `aoPerder` e `desanexar` (idempotente). Antes de anexar, consulta `chrome.debugger.getTargets()`: no Chrome atual a anexação não falha com o DevTools aberto, então é o campo `attached` que revela outro depurador. As falhas viram `FalhaAnexacao` com categoria `outro-depurador`, `alvo-nao-depuravel` ou `desconhecido`; os textos estão em `extensao/shared/mensagens-debugger.ts`. `chrome.debugger.onDetach` vira `aoPerder(motivo)`.
-3. **Runner** (`extensao/background/scenarios.ts`): `executarCenario` abre a `url_inicial`, roda o aquecimento e os passos, e altera o `AndamentoExecucao` da sessão a cada transição. Os estados e a tabela de transições estão em `extensao/shared/execucao-estado.ts` (ociosa → preparando → aquecendo → executando ⇄ coletando → concluída | erro | cancelada). As ações usam o domínio `Input` do CDP, para que os eventos sejam confiáveis e contem para o INP. Toda espera é uma sondagem de 50 ms com prazo, e o cancelamento é um `AbortSignal`. Passos de medição (`medir`, `snapshot`, `forcar_gc`) só rodam se a verificação de `VERIFICACAO_DO_PASSO` ("Memória") estiver marcada; quem os executa é `extensao/background/memoria.ts`. Com "CPU" marcada, o runner liga o perfil depois do aquecimento e o para ao final dos passos principais (ver "CPU").
+3. **Runner** (`extensao/background/scenarios.ts`): `executarCenario` faz a preparação (ver "Condições de teste e sessão da aplicação"), abre a `url_inicial`, roda o aquecimento e os passos, e altera o `AndamentoExecucao` da sessão a cada transição. Os estados e a tabela de transições estão em `extensao/shared/execucao-estado.ts` (ociosa → preparando → aquecendo → executando ⇄ coletando → concluída | erro | cancelada). As ações usam o domínio `Input` do CDP, para que os eventos sejam confiáveis e contem para o INP. Toda espera é uma sondagem de 50 ms com prazo, e o cancelamento é um `AbortSignal`. Passos de medição (`medir`, `snapshot`, `forcar_gc`) só rodam se a verificação de `VERIFICACAO_DO_PASSO` ("Memória") estiver marcada; quem os executa é `extensao/background/memoria.ts`. Com "CPU" marcada, o runner liga o perfil depois do aquecimento e o para ao final dos passos principais (ver "CPU").
 4. **Orquestração** (`extensao/background/sessao.ts`): o runner roda fora da fila de operações e nunca espera por ela. A cada início e fim de iteração ele avisa; o orquestrador repassa a marca à página (mensagem `marcar`, que faz a página enviar o lote na hora) e usa os intervalos para carimbar cada long task, interação e erro com a iteração (`extensao/shared/agregacao.ts`). O que acontece no aquecimento é descartado. No fim, `sessao-estado.ts` monta o `ResultadoCenario` com mediana, p75 e p95 (`extensao/shared/stats.ts`) entre as iterações completas.
 
 Os testes unitários do runner e do orquestrador usam o transporte falso, a página simulada e o relógio simulado de `extensao/background/apoio-teste.ts`.
@@ -103,6 +111,30 @@ Os testes unitários do runner e do orquestrador usam o transporte falso, a pág
 Para rodar um cenário à mão: `npm run build`, `npm run pagina-teste`, carregue a extensão, abra `http://localhost:4300/` em uma janela sem DevTools, abra o side panel, cole o conteúdo de `pagina-teste/cenarios/abrir-fechar.json` em "Cenários", salve e clique em "Analisar".
 
 Nos testes de integração o Playwright é ele mesmo um cliente de depuração de cada página, o que acionaria o bloqueio por "outro depurador". Por isso `testes/extensao/fixtures.ts` grava `sondagem:teste:ignorar-depurador-anexado` em `chrome.storage.local`, chave lida só em `service-worker.ts` e sem interface. O teste do bloqueio remove a chave.
+
+## Condições de teste e sessão da aplicação
+
+O formato para o usuário está em `docs/cenario.md`. Comandos de CDP em `COMANDOS_DE_CONDICOES` (`extensao/background/condicoes.ts`); o primeiro teste de `testes/extensao/condicoes.spec.ts` os envia pelo `chrome.debugger` real.
+
+- **Perfis** (`extensao/shared/condicoes.ts`, puro): `nenhum`, `padrao` (CPU 4×, 150 ms, 1600/750 kbps), os salvos pelo usuário (`extensao/storage/perfis.ts`) e valores inline. `resolverThrottling` devolve os números ou o erro com a lista de perfis; o service worker resolve de novo antes de executar, e perfil inexistente recusa o início (`perfil-inexistente`).
+- **Preparação do runner** (`preparar`, em `scenarios.ts`): aplica os efeitos (`Emulation.setCPUThrottlingRate`, `Network.emulateNetworkConditions`, `Network.setCacheDisabled`), limpa o cache (`Network.clearBrowserCache` e `Storage.clearDataForOrigin` com `cache_storage`), apaga o storage confirmado, abre a URL inicial e, se o cenário declara login e a aba caiu nele, roda `sessao.passos_login`. A aplicação dos efeitos usa o `enviar` que o cancelamento solta; a restauração vai pela conexão direta, no `finally`.
+- **Sessão manual**: sem escolha na confirmação nada é aplicado (`SEM_CONDICOES`). Com um perfil escolhido, `sessao.ts` anexa o debugger e aplica só CPU e rede; cache não é tocado.
+- **`limpar_storage`**: a confirmação (`confirmacao.ts`) lista os tipos e só emite `storageConfirmado` com a caixa marcada; `confirmarLimpeza` no service worker só produz `TiposConfirmados` se a lista cobrir o que o cenário declara, senão recusa (`limpeza-nao-confirmada`). `cookies` e `indexeddb` saem por `Storage.clearDataForOrigin`. `localStorage` e `sessionStorage` são limpos **na página** (`Runtime.evaluate`, só se `location.origin` for a do cenário): no Chromium, o tipo `local_storage` do CDP apaga também o `sessionStorage`.
+- **Sessão expirada**: com `sessao.url_login`, o runner observa `Page.frameNavigated` e `Page.navigatedWithinDocument` do quadro principal (`casaUrlLogin`: prefixo, ou padrão com `*`). Ao casar, a execução para com `andamento.falhaDeSessao`; a política `em_erro` não se aplica, e `sessao-estado.ts` deixa `estatisticas` vazia. Com `passos_login` declarado, a detecção só liga depois da preparação.
+- **Mascaramento**: o runner recebe o cenário como escrito; no estado da sessão e no histórico vai `mascararCenario(...)`, com `***` no lugar do que é digitado nos passos de login.
+- O que valeu fica em `ResultadoSessao.condicoes` (`CondicoesDeTeste`, em números). `ResultadoSessao.extensoes` lista as outras extensões ativas (`chrome.management.getAll()`, filtrado em `extensao/shared/extensoes.ts`); a confirmação alerta sem bloquear.
+- Cenários de aceitação: `sessao-preservada` (cookie e `localStorage` ficam), `sessao-expira` (falha de sessão na iteração 3), `limpar-storage` e `login-declarado`.
+
+## Histórico
+
+`extensao/storage/repository.ts` (`criarRepositorio`) é a única porta de acesso ao IndexedDB: banco `sondagem`, store `execucoes` (metadados e estatísticas; índices `grupo` e `inicio`) e store `detalhes` (as listas de `DadosColetados`), com o mesmo `id`. O service worker grava; a interface lê pela `ponte.ts`. O formato e as regras são puros, em `extensao/shared/historico.ts`.
+
+- **Gravação** (`sessao.ts`): ao iniciar (`registroEmAndamento`, estado `em-andamento`), ao fim de cada iteração do cenário e ao terminar (`registroFinal`). Cancelada, interrompida e com erro também são salvas. Falha do repositório não derruba a análise.
+- **Recuperação** (`recuperar`): o estado gravado decide a limpeza (soltar o debugger, remover scripts) e a sessão vira resultado interrompido; depois `fecharOrfas` fecha com `interromperRegistro` o que ficou `em-andamento` sem sessão (o navegador fechou), mantendo o que estava gravado.
+- **Limites**: tamanho estimado pelo JSON. Acima do limite por execução, `truncarDados` remove listas inteiras na ordem de `ORDEM_DE_TRUNCAMENTO` e o resultado lista o que saiu em `truncado`; as estatísticas ficam no registro e nunca são cortadas. Com o histórico cheio, a nova execução entra só com as estatísticas. A interface avisa a partir de 80% (`usoDoHistorico`).
+- **Retenção**: `idsARemover` (quantidade por cenário e idade), aplicada depois de cada gravação final. Padrões em `CONFIGURACAO_PADRAO`; a configuração fica em `chrome.storage.local` (`extensao/storage/configuracao.ts`).
+- **Parcial**: `ehParcial` e `podeSerReferencia`. Só execução de cenário concluída, sem falha de sessão, serve de referência e entra em `variacaoEntreExecucoes` (`extensao/shared/variacao.ts`: coeficiente de variação da mediana de cada métrica entre execuções do mesmo cenário, condições e número de iterações).
+- Nos testes unitários do orquestrador o repositório é o `criarRepositorioFalso` de `apoio-teste.ts`; o de verdade é testado com `fake-indexeddb`. Nos de integração, `historico()` e `estadoGravado()` de `testes/extensao/apoio.ts` leem o IndexedDB pelo service worker.
 
 ## Memória
 

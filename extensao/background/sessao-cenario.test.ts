@@ -103,7 +103,11 @@ function montar(gravado?: EstadoSessao) {
   /** Espera a análise terminar (o runner roda em microtarefas, com o relógio simulado). */
   async function ateTerminar(): Promise<EstadoSessao> {
     for (let i = 0; i < 20_000; i++) {
-      if (estadoGravado?.fase === 'ociosa' && estadoGravado.resultado) return estadoGravado;
+      // O resultado não fica no estado gravado (só o id): vem da visão, como na interface.
+      if (estadoGravado?.fase === 'ociosa' && estadoGravado.idResultado) {
+        const { visao } = await orquestrador.comando({ tipo: 'obter-visao' });
+        return { ...estadoGravado, resultado: visao.resultado };
+      }
       await new Promise<void>((resolver) => setImmediate(resolver));
     }
     throw new Error('A análise não terminou.');
@@ -435,9 +439,11 @@ describe('conexão perdida', () => {
     await segundo.orquestrador.recuperar();
 
     expect(segundo.transporte.anexadas.size).toBe(0);
-    expect(segundo.gravado()).toMatchObject({
-      fase: 'ociosa',
-      resultado: { desfecho: 'interrompida', cenario: { estadoFinal: 'erro' }, limpeza: [{ recurso: 'depurador', quantidade: 1 }] },
+    expect(segundo.gravado()).toMatchObject({ fase: 'ociosa', resultado: null });
+    expect((await segundo.orquestrador.comando({ tipo: 'obter-visao' })).visao.resultado).toMatchObject({
+      desfecho: 'interrompida',
+      cenario: { estadoFinal: 'erro' },
+      limpeza: [{ recurso: 'depurador', quantidade: 1 }],
     });
   });
 });

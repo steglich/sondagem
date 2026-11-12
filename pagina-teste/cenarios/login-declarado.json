@@ -1,0 +1,27 @@
+{
+  "versao_esquema": 1,
+  "nome": "login-declarado",
+  "descricao": "Declara os passos de login: se a página protegida pedir o login no início, a extensão autentica e segue.",
+  "url_inicial": "http://localhost:4300/protegida",
+  "execucao": { "iteracoes": 2 },
+  "sessao": {
+    "url_login": "http://localhost:4300/login",
+    "passos_login": [
+      { "tipo": "digitar", "seletor": "[data-testid='campo-usuario']", "texto": "usuario-de-teste" },
+      { "tipo": "digitar", "seletor": "[data-testid='campo-senha']", "texto": "senha-de-teste-nao-gravar" },
+      { "tipo": "clicar", "seletor": "[data-testid='entrar']" },
+      { "tipo": "esperar", "seletor": "[data-testid='usuario-logado']" }
+    ]
+  },
+  "passos": [
+    {
+      "tipo": "repetir",
+      "vezes": "iteracoes",
+      "passos": [
+        { "tipo": "clicar", "seletor": "[data-testid='abrir-componente']" },
+        { "tipo": "esperar", "seletor": "#area .componente" },
+        { "tipo": "clicar", "seletor": "[data-testid='fechar-componente']" }
+      ]
+    }
+  ]
+}

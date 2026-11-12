@@ -1,5 +1,7 @@
 /** Transporte de CDP, relógio e página simulados para os testes unitários do service worker. */
+import { type ExecucaoGuardada, idsARemover } from '../shared/historico.ts';
 import type { MotivoDesconexao } from '../shared/types.ts';
+import type { RepositorioResultados } from '../storage/repository.ts';
 import type { TransporteCdp } from './cdp.ts';
 import { GRUPO_COLETA, contarPorConstrutor } from './memoria.ts';
 
@@ -131,6 +133,8 @@ export function criarPagina(transporte: TransporteFalso) {
     aoComando: null as ((metodo: string, parametros: Record<string, unknown>) => void) | null,
     erroDeNavegacao: null as string | null,
     carregarAoNavegar: true,
+    /** O que a limpeza de storage feita na página devolve: `false` se a aba saiu da origem do cenário. */
+    limpezaNaPagina: true,
     /** O que `Performance.getMetrics` e `DOM.getDetachedDomNodes` devolvem. */
     memoria: { heap: 1_000_000, nos: 50, listeners: 10, desanexados: 0 },
     /** Objetos "vivos" da página: é sobre eles que a função do censo roda de verdade. */
@@ -211,6 +215,8 @@ export function criarPagina(transporte: TransporteFalso) {
       return { result: { value: { ua: 'Mozilla/5.0 Chrome/158.0.0.0 Safari/537.36', largura: 1280, altura: 720, dpr: 2 } } };
     }
     if (expressao.includes('innerWidth / 2')) return { result: { value: { x: 640, y: 360 } } };
+    // Limpeza de `localStorage` ou `sessionStorage` na página: `true` se a página é da origem pedida.
+    if (expressao.includes('.clear()')) return { result: { value: pagina.limpezaNaPagina } };
     const seletor = seletorDe(expressao);
     if (seletor.startsWith('!!')) return { exceptionDetails: { text: 'Uncaught', exception: { description: `SyntaxError: '${seletor}' is not a valid selector` } } };
     const elemento = elementos.get(seletor);
@@ -251,4 +257,40 @@ export function entregaDePerfil(amostras: readonly { nome: string; delta: number
       args: { data: { cpuProfile: { nodes: nos, samples: amostras.map((a) => nomes.indexOf(a.nome) + 2) }, timeDeltas: amostras.map((a) => a.delta) } },
     },
   ];
+}
+
+/** Repositório em memória, com o registro de cada gravação na ordem em que foi feita. */
+export interface RepositorioFalso extends RepositorioResultados {
+  /** Cópia do que cada `gravar` recebeu. */
+  gravacoes: ExecucaoGuardada[];
+  guardadas: Map<string, ExecucaoGuardada>;
+}
+
+export function criarRepositorioFalso(): RepositorioFalso {
+  const guardadas = new Map<string, ExecucaoGuardada>();
+  const repositorio: RepositorioFalso = {
+    gravacoes: [],
+    guardadas,
+    async gravar(registro, dados) {
+      // Como o IndexedDB: o que entra é uma cópia, e mudanças posteriores no objeto não a afetam.
+      const copia = structuredClone({ registro, dados });
+      repositorio.gravacoes.push(copia);
+      guardadas.set(registro.id, copia);
+    },
+    ler: async (id) => structuredClone(guardadas.get(id) ?? null),
+    listar: async (filtro) =>
+      [...guardadas.values()]
+        .map((g) => structuredClone(g.registro))
+        .filter((r) => filtro?.grupo === undefined || r.grupo === filtro.grupo)
+        .sort((a, b) => b.inicio - a.inicio),
+    emAndamento: async () => (await repositorio.listar()).filter((r) => r.estado === 'em-andamento'),
+    remover: async (id) => void guardadas.delete(id),
+    tamanhoTotal: async () => (await repositorio.listar()).reduce((total, r) => total + r.tamanho, 0),
+    async aplicarRetencao(retencao, agora) {
+      const ids = idsARemover(await repositorio.listar(), retencao, agora);
+      ids.forEach((id) => guardadas.delete(id));
+      return ids;
+    },
+  };
+  return repositorio;
 }

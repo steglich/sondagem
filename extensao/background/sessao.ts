@@ -12,20 +12,33 @@
  * está na fila pode esperar o runner; o runner nunca espera a fila.
  */
 import { type Marcacao, aplicarErroPagina, aplicarLote } from '../shared/agregacao.ts';
-import { type Cenario, type Passo, resolverIteracoes, validarCenario } from '../shared/cenario.ts';
+import { type Cenario, type Passo, type Throttling, mascararCenario, resolverIteracoes, validarCenario } from '../shared/cenario.ts';
+import { type PerfilThrottling, SEM_CONDICOES, condicoesDe, resolverThrottling, semLimitacao } from '../shared/condicoes.ts';
 import { LIMITE_PERFIL_MANUAL_MS } from '../shared/cpu.ts';
 import { erroDaPagina } from '../shared/erros-pagina.ts';
 import { ESTADOS_FINAIS } from '../shared/execucao-estado.ts';
+import {
+  BYTES_POR_MB,
+  CONFIGURACAO_PADRAO,
+  type ConfiguracaoArmazenamento,
+  interromperRegistro,
+  registroEmAndamento,
+  registroFinal,
+  resultadoDoRegistro,
+} from '../shared/historico.ts';
+import { type TiposConfirmados, confirmarLimpeza, descreverStorage } from '../shared/limpeza-storage.ts';
 import { type Limitador, criarLimitador } from '../shared/limitador.ts';
 import { comecarParada, concluir, estadoInicial, iniciar, visaoDe } from '../shared/sessao-estado.ts';
 import { FALHAS_DE_ANEXACAO } from '../shared/mensagens-debugger.ts';
 import { INTERVALO_MEDICAO_MANUAL_MS, METRICAS_MEMORIA } from '../shared/memoria.ts';
 import {
   type ComandoInterface,
+  type CondicoesDeTeste,
   type ConfiguracaoExecucao,
   type Desconectados,
   type Desfecho,
   type EstadoSessao,
+  type ExtensaoAtiva,
   INTERVALO_LOTE_MS,
   type ItemLimpeza,
   type Lote,
@@ -33,6 +46,7 @@ import {
   type MensagemParaPagina,
   type MotivoDesconexao,
   type MotivoRecusa,
+  type Navegador,
   type PedidoCenario,
   type RespostaComando,
   type SessaoEmAndamento,
@@ -40,8 +54,11 @@ import {
 } from '../shared/types.ts';
 import { avaliarUrl } from '../shared/url.ts';
 import { normalizarSelecao, verificacoesComDebugger } from '../shared/verificacoes.ts';
+import type { RepositorioResultados } from '../storage/repository.ts';
 import { type ConexaoCdp, FalhaAnexacao } from './cdp.ts';
+import { efeitosDasCondicoes } from './condicoes.ts';
 import { type PerfilCpu, criarPerfilCpu } from './cpu.ts';
+import { type PilhaDeEfeitos, criarPilhaDeEfeitos } from './efeitos.ts';
 import { type ContextoMemoria, lerContadoresDom, medirMemoria, tirarSnapshot } from './memoria.ts';
 import { MOTIVO_CANCELAMENTO, MOTIVO_CONEXAO_PERDIDA, type Relogio, executarCenario, relogioReal } from './scenarios.ts';
 
@@ -77,6 +94,17 @@ export interface AmbienteSessao {
   repetir?: (acao: () => void, ms: number) => () => void;
   /** Duração máxima do perfil de CPU na sessão manual. O padrão é `LIMITE_PERFIL_MANUAL_MS`. */
   limitePerfilCpuMs?: number;
+  /** Histórico de resultados. Sem ele, o resultado fica só na memória do service worker. */
+  repositorio?: RepositorioResultados;
+  /** Perfis de throttling salvos pelo usuário. */
+  lerPerfis?: () => Promise<PerfilThrottling[]>;
+  /** Limites e retenção do histórico. O padrão é `CONFIGURACAO_PADRAO`. */
+  lerConfiguracao?: () => Promise<ConfiguracaoArmazenamento>;
+  /** Outras extensões ativas no perfil do navegador. */
+  outrasExtensoes?: () => Promise<ExtensaoAtiva[]>;
+  navegador?: () => Navegador | null;
+  /** Identificador de uma nova análise. O padrão é `crypto.randomUUID()`. */
+  novoId?: () => string;
 }
 
 /** Porta aberta pelo código injetado, já reduzida ao que a orquestração usa. */
@@ -108,6 +136,8 @@ const MENSAGENS: Record<MotivoRecusa, string> = {
   'sem-verificacao': 'Marque ao menos uma verificação.',
   'url-nao-suportada': 'Esta página não pode ser analisada.',
   'cenario-invalido': 'O cenário é inválido.',
+  'perfil-inexistente': 'O perfil de throttling não existe.',
+  'limpeza-nao-confirmada': 'A limpeza de storage não foi confirmada.',
   debugger: 'Não foi possível anexar o debugger à aba.',
   snapshot: 'Não foi possível tirar o snapshot.',
   erro: 'Não foi possível iniciar a análise.',
@@ -115,10 +145,15 @@ const MENSAGENS: Record<MotivoRecusa, string> = {
 
 /** O que, além das verificações, depende do debugger em uma execução de cenário. */
 export const DEPENDENTE_CENARIO = 'Execução do cenário';
+/** Na sessão manual, o throttling escolhido na confirmação também depende do debugger. */
+export const DEPENDENTE_THROTTLING = 'Throttling';
 
 interface Plano {
+  /** Cenário como o usuário escreveu, com os textos de login. Não é gravado em lugar nenhum. */
   definicao: Cenario;
   configuracao: ConfiguracaoExecucao;
+  condicoes: CondicoesDeTeste;
+  limparStorage: TiposConfirmados | null;
 }
 
 /** Runner em curso: quem cancela aciona o `controle` e espera a `corrida` terminar. */
@@ -174,6 +209,11 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
   let perfilCpu: PerfilCpu | null = null;
   /** Cancela o temporizador do limite de duração do perfil de CPU. */
   let pararLimiteCpu: (() => void) | null = null;
+  /** Throttling aplicado na sessão manual, a desfazer no encerramento. O do cenário pertence ao runner. */
+  let condicoesManuais: PilhaDeEfeitos | null = null;
+  /** Quantas condições o runner desfez na restauração da execução em curso. */
+  let condicoesRestauradas = 0;
+  const repositorio = ambiente.repositorio ?? null;
   const repetir =
     ambiente.repetir ??
     ((acao: () => void, ms: number) => {
@@ -190,9 +230,69 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     return resultado;
   }
 
+  /** O resultado não vai para `chrome.storage.session`: fica no repositório e é relido pelo `idResultado`. */
+  function salvarEstado(): Promise<void> {
+    return ambiente.gravarEstado(estado.resultado ? { ...estado, resultado: null } : estado);
+  }
+
   async function gravar(novo: EstadoSessao): Promise<void> {
     estado = novo;
-    await ambiente.gravarEstado(estado);
+    await salvarEstado();
+  }
+
+  async function configuracaoDoHistorico(): Promise<ConfiguracaoArmazenamento> {
+    return (await ambiente.lerConfiguracao?.().catch(() => undefined)) ?? CONFIGURACAO_PADRAO;
+  }
+
+  /** Grava no histórico a análise em curso, com o que já foi coletado. Uma falha aqui não para a análise. */
+  async function salvarParcial(sessao: SessaoEmAndamento): Promise<void> {
+    if (!repositorio) return;
+    try {
+      const { registro, dados } = registroEmAndamento(sessao);
+      await repositorio.gravar(registro, dados);
+    } catch (erro) {
+      console.error('Sondagem: falha ao gravar a análise em andamento', erro);
+    }
+  }
+
+  /**
+   * Grava o resultado final no histórico, dentro dos limites, e aplica a retenção.
+   * Devolve o estado com o resultado como ficou guardado (pode ter listas truncadas).
+   */
+  async function guardarResultado(novo: EstadoSessao, definicao: Cenario | null): Promise<EstadoSessao> {
+    const resultado = novo.resultado;
+    if (!repositorio || !resultado) return novo;
+    try {
+      const configuracao = await configuracaoDoHistorico();
+      let final = registroFinal(resultado, definicao, configuracao.limiteExecucaoMb * BYTES_POR_MB);
+      const outras = (await repositorio.listar()).filter((r) => r.id !== resultado.id).reduce((total, r) => total + r.tamanho, 0);
+      // Histórico cheio: a execução entra só com as estatísticas, e o resultado diz o que ficou de fora.
+      if (outras + final.registro.tamanho > configuracao.limiteHistoricoMb * BYTES_POR_MB) final = registroFinal(resultado, definicao, 0);
+      await repositorio.gravar(final.registro, final.dados);
+      await repositorio.aplicarRetencao(configuracao.retencao, ambiente.agora());
+      return { ...novo, resultado: final.resultado };
+    } catch (erro) {
+      console.error('Sondagem: falha ao gravar o resultado no histórico', erro);
+      return novo;
+    }
+  }
+
+  /** Fecha como interrompidas as análises que ficaram "em andamento" no histórico sem sessão que as conduza. */
+  async function fecharOrfas(): Promise<void> {
+    if (!repositorio) return;
+    try {
+      const pendentes = (await repositorio.emAndamento()).filter((registro) => registro.id !== estado.sessao?.id);
+      if (pendentes.length === 0) return;
+      const limite = (await configuracaoDoHistorico()).limiteExecucaoMb * BYTES_POR_MB;
+      for (const pendente of pendentes) {
+        const guardada = await repositorio.ler(pendente.id);
+        if (!guardada) continue;
+        const fechada = interromperRegistro(guardada, ambiente.agora(), limite);
+        await repositorio.gravar(fechada.registro, fechada.dados);
+      }
+    } catch (erro) {
+      console.error('Sondagem: falha ao recuperar análises interrompidas', erro);
+    }
   }
 
   function aceita(): RespostaComando {
@@ -205,20 +305,39 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
 
   /** Grava o estado sem esperar e pede uma publicação. Para mudanças feitas fora da fila. */
   function persistir(): void {
-    void enfileirar(() => ambiente.gravarEstado(estado));
+    void enfileirar(() => salvarEstado());
     limitador.solicitar();
   }
 
-  /** Valida o cenário pedido e resolve a configuração efetiva. Cenário inválido não executa nada. */
-  function planejar(pedido: PedidoCenario): Plano | { recusa: string } {
+  async function perfisSalvos(): Promise<PerfilThrottling[]> {
+    return (await ambiente.lerPerfis?.().catch(() => undefined)) ?? [];
+  }
+
+  /**
+   * Valida o cenário pedido e resolve a configuração e as condições efetivas. Cenário
+   * inválido, perfil de throttling inexistente ou limpeza de storage sem confirmação
+   * não executam nada.
+   */
+  async function planejar(pedido: PedidoCenario): Promise<Plano | { recusa: RespostaComando }> {
     const validacao = validarCenario(pedido.definicao);
     if (!validacao.ok) {
       const [primeiro] = validacao.erros;
       const outros = validacao.erros.length - 1;
       const resto = outros > 0 ? ` (e mais ${outros} erro${outros > 1 ? 's' : ''})` : '';
-      return { recusa: `${MENSAGENS['cenario-invalido']} ${primeiro!.caminho || '/'}: ${primeiro!.mensagem}${resto}` };
+      return { recusa: recusa('cenario-invalido', `${MENSAGENS['cenario-invalido']} ${primeiro!.caminho || '/'}: ${primeiro!.mensagem}${resto}`) };
     }
     const definicao = validacao.cenario;
+    const throttling = resolverThrottling(definicao.execucao?.throttling, await perfisSalvos());
+    if (!throttling.ok) return { recusa: recusa('perfil-inexistente', throttling.mensagem) };
+    const limpeza = confirmarLimpeza(definicao, pedido.storageConfirmado);
+    if (!limpeza.ok) {
+      return {
+        recusa: recusa(
+          'limpeza-nao-confirmada',
+          `Este cenário apaga ${descreverStorage(limpeza.faltando)} da aplicação, e isso não foi confirmado. A execução não começou e nada foi apagado.`,
+        ),
+      };
+    }
     return {
       definicao,
       configuracao: {
@@ -228,6 +347,12 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         throttling: definicao.execucao?.throttling ?? null,
         versaoBuild: pedido.versaoBuild?.trim() || null,
       },
+      condicoes: condicoesDe(throttling.perfil, {
+        desligado: definicao.execucao?.manter_cache !== true,
+        limpo: true,
+        storageLimpo: limpeza.tipos,
+      }),
+      limparStorage: limpeza.tipos.length > 0 ? limpeza.tipos : null,
     };
   }
 
@@ -307,7 +432,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     } finally {
       tirandoSnapshot = false;
     }
-    if (estado.sessao === sessao) await ambiente.gravarEstado(estado);
+    if (estado.sessao === sessao) await salvarEstado();
     limitador.imediato();
     return aceita();
   }
@@ -325,11 +450,19 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     });
   }
 
-  function iniciarExecucao(sessao: SessaoEmAndamento, cdp: ConexaoCdp): void {
-    const { definicao, configuracao, andamento } = sessao.cenario!;
+  function iniciarExecucao(sessao: SessaoEmAndamento, cdp: ConexaoCdp, plano: Plano): void {
+    const { configuracao, andamento } = sessao.cenario!;
     const controle = new AbortController();
+    condicoesRestauradas = 0;
     const corrida = executarCenario(
-      { cenario: definicao, iteracoes: configuracao.iteracoes, verificacoesAtivas: sessao.selecao },
+      {
+        // A definicao do plano, e não a da sessão: a da sessão vem sem os textos de login.
+        cenario: plano.definicao,
+        iteracoes: configuracao.iteracoes,
+        verificacoesAtivas: sessao.selecao,
+        condicoes: plano.condicoes,
+        limparStorage: plano.limparStorage,
+      },
       {
         cdp,
         relogio,
@@ -348,6 +481,11 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
             }
           }
           persistir();
+          // Ao fim de cada iteração, o que foi agregado vai para o histórico.
+          if (marca?.fase === 'fim' && marca.iteracao !== 'aquecimento') void enfileirar(() => salvarParcial(sessao));
+        },
+        aoRestaurar(desfeitas) {
+          if (estado.sessao === sessao) condicoesRestauradas = desfeitas.length;
         },
       },
       andamento,
@@ -366,17 +504,30 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     return final === 'concluida' ? 'concluida' : final === 'cancelada' ? 'cancelada' : 'erro';
   }
 
-  async function iniciarSessao(idAba: number, selecaoPedida: unknown, pedido?: PedidoCenario): Promise<RespostaComando> {
+  async function iniciarSessao(
+    idAba: number,
+    selecaoPedida: unknown,
+    pedido?: PedidoCenario,
+    throttlingManual?: Throttling,
+  ): Promise<RespostaComando> {
     if (estado.fase !== 'ociosa') return recusa('sessao-ativa');
     const selecao = normalizarSelecao(selecaoPedida);
     if (selecao.length === 0) return recusa('sem-verificacao');
 
     let plano: Plano | undefined;
+    // Sessão manual: nada muda na aba, a não ser que o usuário tenha escolhido um throttling na confirmação.
+    let condicoes: CondicoesDeTeste = SEM_CONDICOES;
     if (pedido) {
-      const planejado = planejar(pedido);
-      if ('recusa' in planejado) return recusa('cenario-invalido', planejado.recusa);
+      const planejado = await planejar(pedido);
+      if ('recusa' in planejado) return planejado.recusa;
       plano = planejado;
+      condicoes = plano.condicoes;
+    } else if (throttlingManual !== undefined) {
+      const throttling = resolverThrottling(throttlingManual, await perfisSalvos());
+      if (!throttling.ok) return recusa('perfil-inexistente', throttling.mensagem);
+      condicoes = condicoesDe(throttling.perfil, { desligado: false, limpo: false });
     }
+    const comThrottlingManual = !plano && !semLimitacao(condicoes);
 
     const url = await ambiente.urlDaAba(idAba);
     const avaliacao = avaliarUrl(url);
@@ -394,7 +545,11 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     }
 
     // O debugger só é anexado aqui, depois da confirmação, e só se a análise exigir.
-    const dependentes = [...(plano ? [DEPENDENTE_CENARIO] : []), ...verificacoesComDebugger(selecao).map((v) => v.nome)];
+    const dependentes = [
+      ...(plano ? [DEPENDENTE_CENARIO] : []),
+      ...(comThrottlingManual ? [DEPENDENTE_THROTTLING] : []),
+      ...verificacoesComDebugger(selecao).map((v) => v.nome),
+    ];
     let cdp: ConexaoCdp | null = null;
     if (dependentes.length > 0) {
       cdp = ambiente.criarCdp();
@@ -415,6 +570,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     }
 
     const anterior = estado;
+    const id = ambiente.novoId?.() ?? crypto.randomUUID();
     try {
       // Sobra de uma sessão que não terminou direito não pode impedir o registro.
       await ambiente.removerScripts([ID_SCRIPT_SESSAO]);
@@ -426,7 +582,12 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         inicio: ambiente.agora(),
         idsScripts: [ID_SCRIPT_SESSAO],
         usaDebugger: cdp !== null,
-        cenario: plano,
+        // No estado e no histórico o cenário vai sem os textos digitados no login.
+        cenario: plano ? { definicao: mascararCenario(plano.definicao), configuracao: plano.configuracao } : undefined,
+        id,
+        condicoes,
+        extensoes: (await ambiente.outrasExtensoes?.().catch(() => undefined)) ?? [],
+        navegador: ambiente.navegador?.() ?? null,
       });
       if (!transicao.ok) {
         await cdp?.desanexar();
@@ -437,6 +598,8 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
       // e a porta só é aceita com a sessão ativa.
       await gravar(transicao.estado);
       const sessao = transicao.estado.sessao!;
+      // A análise entra no histórico já ao começar, como "em andamento".
+      await salvarParcial(sessao);
       conexao = cdp;
       fimUltimaLongTask = null;
       if (cdp) {
@@ -444,8 +607,13 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
         if (selecao.includes('erros-pagina')) await coletarErrosDaPagina(sessao, cdp);
       }
       // Em cenário não há injeção direta: a carga da URL inicial traz o script registrado.
-      if (plano && cdp) iniciarExecucao(sessao, cdp);
+      if (plano && cdp) iniciarExecucao(sessao, cdp, plano);
       else {
+        if (cdp && comThrottlingManual) {
+          condicoesManuais = criarPilhaDeEfeitos();
+          if (condicoes.rede) await cdp.enviar('Network.enable');
+          for (const efeito of efeitosDasCondicoes(condicoes, cdp)) await condicoesManuais.aplicar(efeito);
+        }
         await ambiente.injetar(idAba);
         if (cdp && selecao.includes('dom-listeners')) await lerContadoresDom(contextoMemoria(sessao, cdp), 'inicio');
         if (cdp && selecao.includes('memoria')) await coletarMemoriaManual(sessao, cdp);
@@ -459,9 +627,12 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
       pararLimiteCpu = null;
       await perfilCpu?.abandonar();
       perfilCpu = null;
+      await condicoesManuais?.desfazerTudo();
+      condicoesManuais = null;
       await cdp?.desanexar();
       conexao = null;
       await ambiente.removerScripts([ID_SCRIPT_SESSAO]).catch(() => 0);
+      await repositorio?.remover(id).catch(() => undefined);
       await gravar(anterior);
       const detalhe = erro instanceof Error ? erro.message : String(erro);
       return recusa('erro', `${MENSAGENS.erro} ${detalhe}`);
@@ -532,6 +703,10 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     if (conexao?.anexada && sessao.tipo === 'sessao-manual' && sessao.selecao.includes('dom-listeners')) {
       await lerContadoresDom(contextoMemoria(sessao, conexao), 'fim').catch(() => undefined);
     }
+    // Sessão manual: o throttling escolhido sai antes do debugger. Em cenário, o runner já restaurou.
+    const condicoesDesfeitas = condicoesRestauradas + ((await condicoesManuais?.desfazerTudo())?.length ?? 0);
+    condicoesManuais = null;
+    condicoesRestauradas = 0;
     await conexao?.desanexar();
     conexao = null;
     execucao = null;
@@ -563,6 +738,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
           quantidade: somar('temporizadores') + encerramento.temporizadores + publicacaoPendente + medicoesPeriodicas + limiteCpu,
         },
         { recurso: 'depurador', quantidade: depurador },
+        { recurso: 'condicao-de-teste', quantidade: condicoesDesfeitas },
       ] satisfies ItemLimpeza[]
     ).filter((item) => item.quantidade > 0);
 
@@ -572,7 +748,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
       limpeza,
       paginaRespondeu: encerramento.respostas.length > 0,
     });
-    if (transicao.ok) await gravar(transicao.estado);
+    if (transicao.ok) await gravar(await guardarResultado(transicao.estado, sessao.cenario?.definicao ?? null));
     limitador.imediato();
   }
 
@@ -603,7 +779,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
   async function receberLote(lote: Lote): Promise<void> {
     if (estado.fase !== 'ativa' || !estado.sessao) return;
     aplicarLote(estado.sessao.dados, lote, marcacaoDe(estado.sessao));
-    await ambiente.gravarEstado(estado);
+    await salvarEstado();
     limitador.solicitar();
   }
 
@@ -623,38 +799,50 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
     porta.enviar({ tipo: 'configurar', selecao: sessao.selecao });
   }
 
+  /** Desfaz o que uma sessão anterior tenha deixado, conforme o estado gravado. */
+  async function recuperarSessao(): Promise<void> {
+    if (estado.fase === 'ociosa') {
+      // Nenhuma sessão: nada da extensão pode continuar registrado.
+      await ambiente.removerScripts().catch(() => 0);
+      return;
+    }
+    // O service worker foi suspenso com uma sessão em curso. Se a aba ainda
+    // existe e a sessão estava ativa, ela continua: o script reconecta sozinho.
+    const aba = estado.sessao ? await ambiente.urlDaAba(estado.sessao.idAba) : null;
+    // Com o debugger é diferente: o runner e os ouvintes de CDP viviam na memória
+    // que se perdeu. A análise acaba como interrompida, e o debugger é solto.
+    const sessao = estado.sessao;
+    if (sessao?.usaDebugger) {
+      const solto = await ambiente.soltarDepurador(sessao.idAba).catch(() => false);
+      if (!solto) sessao.usaDebugger = false;
+      if (sessao.cenario && !ESTADOS_FINAIS.includes(sessao.cenario.andamento.estado)) {
+        sessao.cenario.andamento.estado = 'erro';
+        sessao.cenario.andamento.falhas.push({
+          caminho: '',
+          tipoPasso: '',
+          iteracao: sessao.cenario.andamento.iteracoes.find((i) => i.fim === null)?.numero ?? null,
+          motivo: 'A extensão foi suspensa durante a execução.',
+          acao: 'interrompeu',
+        });
+      }
+      await finalizar('interrompida', false);
+      return;
+    }
+    if (estado.fase === 'parando' || aba === null) await finalizar('interrompida', false);
+  }
+
   return {
     recuperar: () =>
       enfileirar(async () => {
         estado = (await ambiente.lerEstado()) ?? estadoInicial();
-        if (estado.fase === 'ociosa') {
-          // Nenhuma sessão: nada da extensão pode continuar registrado.
-          await ambiente.removerScripts().catch(() => 0);
-          return;
+        // O último resultado mora no repositório; o estado gravado só guarda o id.
+        if (estado.idResultado && repositorio) {
+          const guardada = await repositorio.ler(estado.idResultado).catch(() => null);
+          estado = { ...estado, resultado: guardada ? resultadoDoRegistro(guardada) : null };
         }
-        // O service worker foi suspenso com uma sessão em curso. Se a aba ainda
-        // existe e a sessão estava ativa, ela continua: o script reconecta sozinho.
-        const aba = estado.sessao ? await ambiente.urlDaAba(estado.sessao.idAba) : null;
-        // Com o debugger é diferente: o runner e os ouvintes de CDP viviam na memória
-        // que se perdeu. A análise acaba como interrompida, e o debugger é solto.
-        const sessao = estado.sessao;
-        if (sessao?.usaDebugger) {
-          const solto = await ambiente.soltarDepurador(sessao.idAba).catch(() => false);
-          if (!solto) sessao.usaDebugger = false;
-          if (sessao.cenario && !ESTADOS_FINAIS.includes(sessao.cenario.andamento.estado)) {
-            sessao.cenario.andamento.estado = 'erro';
-            sessao.cenario.andamento.falhas.push({
-              caminho: '',
-              tipoPasso: '',
-              iteracao: sessao.cenario.andamento.iteracoes.find((i) => i.fim === null)?.numero ?? null,
-              motivo: 'A extensão foi suspensa durante a execução.',
-              acao: 'interrompeu',
-            });
-          }
-          await finalizar('interrompida', false);
-          return;
-        }
-        if (estado.fase === 'parando' || aba === null) await finalizar('interrompida', false);
+        await recuperarSessao();
+        // Por último, o que ficou "em andamento" no histórico sem estado de sessão (o navegador fechou).
+        await fecharOrfas();
       }),
 
     comando: (comando) =>
@@ -663,7 +851,7 @@ export function criarOrquestrador(ambiente: AmbienteSessao): Orquestrador {
           case 'obter-visao':
             return aceita();
           case 'iniciar':
-            return iniciarSessao(comando.idAba, comando.selecao, comando.cenario);
+            return iniciarSessao(comando.idAba, comando.selecao, comando.cenario, comando.throttling);
           case 'parar':
             return pararSessao('concluida');
           case 'cancelar':

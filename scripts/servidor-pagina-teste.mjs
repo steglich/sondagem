@@ -1,7 +1,8 @@
 // Servidor estático da página de teste, em http://localhost:4300.
 //
-// Cada caso é uma rota (/limpa, /vazamento-listener, /vazamento-dom, /cpu-pesada, /erros)
-// servida a partir de pagina-teste/<caso>.html. Arquivos .ts são convertidos para
+// Cada caso é uma rota (/limpa, /vazamento-listener, /vazamento-dom, /cpu-pesada, /erros,
+// /login, /protegida) servida a partir de pagina-teste/<caso>.html. A rota /protegida só é
+// servida com o cookie do login simulado; sem ele, redireciona para /login. Arquivos .ts são convertidos para
 // JavaScript na hora, sem minificação, para que os nomes de função (como
 // calculoPesado) apareçam como escritos nos perfis de CPU.
 import { readFile } from 'node:fs/promises';
@@ -29,8 +30,20 @@ function resolverArquivo(caminhoUrl) {
   return arquivo.startsWith(pasta + sep) ? arquivo : null;
 }
 
+/** Mesmo nome de pagina-teste/sessao.ts. */
+const COOKIE_SESSAO = 'sondagem_teste_sessao';
+
+function temSessao(req) {
+  return (req.headers.cookie ?? '').split(';').some((cookie) => cookie.trim() === `${COOKIE_SESSAO}=ativa`);
+}
+
 const servidor = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORTA}`);
+  if (url.pathname === '/protegida' && !temSessao(req)) {
+    const voltar = encodeURIComponent(url.pathname + url.search);
+    res.writeHead(302, { location: `/login?voltar=${voltar}`, 'cache-control': 'no-store' }).end();
+    return;
+  }
   const arquivo = resolverArquivo(url.pathname);
   const tipo = arquivo && tipos[extname(arquivo)];
   if (!arquivo || !tipo) {

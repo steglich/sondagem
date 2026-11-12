@@ -10,6 +10,10 @@
  * transição de estado e a cada início ou fim de iteração. O debugger é sempre
  * desanexado ao sair, inclusive em erro e cancelamento, e o perfil de CPU, se
  * estava ligado, é parado antes.
+ *
+ * As condições de teste (throttling, cache) entram na preparação, antes da carga
+ * da URL inicial, por uma pilha de efeitos reversíveis; a restauração as desfaz
+ * no `finally`, na ordem inversa, antes de o debugger sair.
  */
 import {
   type Cenario,
@@ -22,10 +26,13 @@ import {
   passoAtivo,
   resolverVezes,
 } from '../shared/cenario.ts';
+import { casaUrlLogin } from '../shared/condicoes.ts';
 import { ESTADOS_FINAIS, transitar } from '../shared/execucao-estado.ts';
+import type { TiposConfirmados } from '../shared/limpeza-storage.ts';
 import type {
   Ambiente,
   AndamentoExecucao,
+  CondicoesDeTeste,
   DadosColetados,
   ErroDePasso,
   EstadoExecucao,
@@ -33,7 +40,9 @@ import type {
   RegistroIteracao,
 } from '../shared/types.ts';
 import { ConexaoPerdida, type ConexaoCdp } from './cdp.ts';
+import { efeitosDasCondicoes, limparCache, limparStorage, origemDe } from './condicoes.ts';
 import { criarPerfilCpu } from './cpu.ts';
+import { criarPilhaDeEfeitos } from './efeitos.ts';
 import {
   type ContextoMemoria,
   forcarColeta,
@@ -81,6 +90,10 @@ export interface PlanoExecucao {
   iteracoes: number;
   /** Verificações marcadas; os passos de medição das outras não rodam. */
   verificacoesAtivas: readonly string[];
+  /** Condições já resolvidas em números. Sem o campo, nada é aplicado nem limpo. */
+  condicoes?: CondicoesDeTeste;
+  /** Tipos de storage a apagar, já confirmados pelo usuário. Sem o campo, nenhum dado de sessão é apagado. */
+  limparStorage?: TiposConfirmados | null;
 }
 
 export interface AmbienteRunner {
@@ -97,9 +110,17 @@ export interface AmbienteRunner {
    * aquecimento), que o service worker repassa à página e usa para carimbar os registros.
    */
   aoMudar: (andamento: AndamentoExecucao, marca?: Marca) => void;
+  /** A restauração terminou: nomes das condições desfeitas (throttling, cache). */
+  aoRestaurar?: (desfeitas: string[]) => void;
 }
 
 class Cancelado extends Error {}
+/** A aplicação levou a aba para a tela de login: a política `em_erro` não se aplica. */
+class SessaoExpirada extends Error {
+  constructor(readonly url: string) {
+    super(`Falha de sessão: a aplicação redirecionou para a tela de login (${url}).`);
+  }
+}
 /** Falha de um passo; a política `em_erro` decide o que acontece. */
 class FalhaDePasso extends Error {}
 /** Um passo falhou com `interromper` (ou esgotou as tentativas): a execução acaba. */
@@ -167,9 +188,35 @@ export async function executarCenario(
 
   const cancelarAssinaturas: (() => void)[] = [];
   const rede = { pendentes: new Set<string>(), ultimaAtividade: 0 };
+  const pilha = criarPilhaDeEfeitos();
 
+  const urlLogin = cenario.sessao?.url_login;
+  const passosLogin = cenario.sessao?.passos_login;
+  const sessao = {
+    /** Com login declarado, cair na tela de login durante a preparação é esperado: a detecção começa depois. */
+    detectando: urlLogin !== undefined && !passosLogin,
+    /** URL de login para onde a aba foi levada com a detecção ligada. */
+    expirada: null as string | null,
+    /** Última URL do quadro principal. */
+    urlAtual: null as string | null,
+    quadroPrincipal: null as string | null,
+  };
+
+  function naTelaDeLogin(): boolean {
+    return urlLogin !== undefined && sessao.urlAtual !== null && casaUrlLogin(sessao.urlAtual, urlLogin);
+  }
+
+  /** Para a execução assim que o sinal é acionado ou a sessão da aplicação expira. */
   function conferirCancelamento(): void {
     if (sinal.aborted) throw new Cancelado();
+    if (sessao.expirada !== null) throw new SessaoExpirada(sessao.expirada);
+  }
+
+  function registrarFalhaDeSessao(erro: SessaoExpirada, caminho: string, tipoPasso: string, iteracao: number | null): void {
+    // A mesma falha chega de novo ao sair dos laços: só o primeiro registro vale.
+    if (andamento.falhaDeSessao) return;
+    andamento.falhaDeSessao = { url: erro.url, iteracao };
+    andamento.falhas.push({ caminho, tipoPasso, iteracao, motivo: erro.message, acao: 'interrompeu', falhaDeSessao: true });
   }
 
   function enviar<T>(metodo: string, parametros?: object): Promise<T> {
@@ -184,6 +231,7 @@ export async function executarCenario(
       if (sinal.aborted) throw new Cancelado();
       throw erro;
     }
+    conferirCancelamento();
   }
 
   function ir(para: EstadoExecucao): void {
@@ -425,6 +473,13 @@ export async function executarCenario(
         return;
       } catch (erro) {
         if (erro instanceof Cancelado || erro instanceof ConexaoPerdida) throw erro;
+        if (erro instanceof SessaoExpirada) {
+          // Não é falha do passo nem de performance: nada de pular ou repetir.
+          registrarFalhaDeSessao(erro, caminho, passo.tipo, contexto.iteracao?.numero ?? null);
+          if (contexto.iteracao) contexto.iteracao.completa = false;
+          ambiente.aoMudar(andamento);
+          throw new ExecucaoInterrompida(erro.message);
+        }
         if (tentativa < tentativas) continue;
         const motivo = erro instanceof Error ? erro.message : String(erro);
         const falha: ErroDePasso = {
@@ -531,17 +586,27 @@ export async function executarCenario(
       }),
       // Requisições do documento anterior que ficaram sem desfecho não contam para o novo.
       cdp.aoEvento('Page.frameNavigated', (p) => {
-        if (!(p as { frame?: { parentId?: string } }).frame?.parentId) rede.pendentes.clear();
+        const quadro = (p as { frame?: { id?: string; parentId?: string; url?: string; urlFragment?: string } }).frame;
+        if (!quadro || quadro.parentId) return;
+        rede.pendentes.clear();
+        sessao.quadroPrincipal = quadro.id ?? null;
+        if (quadro.url !== undefined) notarUrl(quadro.url + (quadro.urlFragment ?? ''));
+      }),
+      // Aplicações de página única vão para o login sem carregar outro documento.
+      cdp.aoEvento('Page.navigatedWithinDocument', (p) => {
+        const { frameId, url } = p as { frameId?: string; url?: string };
+        if (url !== undefined && frameId !== undefined && frameId === sessao.quadroPrincipal) notarUrl(url);
       }),
     );
   }
 
-  try {
-    ir('preparando');
-    acompanharRede();
-    await enviar('Page.enable');
-    await enviar('Network.enable');
-    // Carga nova da URL inicial, antes do aquecimento.
+  function notarUrl(url: string): void {
+    sessao.urlAtual = url;
+    if (sessao.detectando && sessao.expirada === null && naTelaDeLogin()) sessao.expirada = url;
+  }
+
+  /** Carga nova da URL inicial. Uma falha aqui interrompe a execução. */
+  async function abrirUrlInicial(): Promise<void> {
     try {
       await navegar(cenario.url_inicial, prazoDe({}));
     } catch (erro) {
@@ -549,6 +614,49 @@ export async function executarCenario(
       andamento.falhas.push({ caminho: '/url_inicial', tipoPasso: 'navegar', iteracao: null, motivo: erro.message, acao: 'interrompeu' });
       throw new ExecucaoInterrompida(erro.message);
     }
+  }
+
+  /**
+   * Preparação: aplica as condições, limpa o cache (e o storage confirmado), abre a
+   * URL inicial e, se o cenário declara login e a aplicação o pediu, autentica.
+   */
+  async function preparar(): Promise<void> {
+    const origem = origemDe(cenario.url_inicial);
+    const { condicoes } = plano;
+    if (condicoes) {
+      // A aplicação passa pelo `enviar` daqui (um cancelamento a solta); a restauração vai pela conexão direta.
+      for (const efeito of efeitosDasCondicoes(condicoes, { enviar }, cdp)) await pilha.aplicar(efeito);
+      if (condicoes.cacheLimpo) await limparCache({ enviar }, origem);
+    }
+    const limparNaPagina = plano.limparStorage?.length ? await limparStorage({ enviar }, origem, plano.limparStorage) : [];
+    await abrirUrlInicial();
+    if (limparNaPagina.length > 0) {
+      // `localStorage` e `sessionStorage` são limpos na página da origem, já carregada; depois, carga nova.
+      for (const expressao of limparNaPagina) {
+        if (!(await avaliar<boolean>(expressao))) {
+          throw new FalhaDePasso(`Não foi possível limpar o storage: a URL inicial levou a aba para fora de ${origem}.`);
+        }
+      }
+      await abrirUrlInicial();
+    }
+    if (passosLogin) {
+      if (naTelaDeLogin()) {
+        await executarLista(passosLogin, '/sessao/passos_login', { iteracao: null, aquecimento: true });
+        await abrirUrlInicial();
+      }
+      // Daqui em diante, voltar ao login é sessão expirada. Vale também se o login não funcionou.
+      sessao.detectando = true;
+      if (naTelaDeLogin()) sessao.expirada = sessao.urlAtual;
+      conferirCancelamento();
+    }
+  }
+
+  try {
+    ir('preparando');
+    acompanharRede();
+    await enviar('Page.enable');
+    await enviar('Network.enable');
+    await preparar();
     andamento.ambiente = await lerAmbiente();
 
     if (cenario.aquecimento?.length) {
@@ -572,7 +680,10 @@ export async function executarCenario(
   } catch (erro) {
     if (andamento.aquecimento && andamento.aquecimento.fim === null) andamento.aquecimento.fim = relogio.agora();
     const cancelada = erro instanceof Cancelado && sinal.reason !== MOTIVO_CONEXAO_PERDIDA;
-    if (!cancelada && !(erro instanceof ExecucaoInterrompida)) {
+    if (erro instanceof SessaoExpirada) {
+      // Fora de um passo (carga inicial, entre iterações): não há caminho a apontar.
+      registrarFalhaDeSessao(erro, '', '', andamento.iteracoes.find((i) => i.fim === null)?.numero ?? null);
+    } else if (!cancelada && !(erro instanceof ExecucaoInterrompida)) {
       const perdeu = erro instanceof ConexaoPerdida || erro instanceof Cancelado;
       andamento.falhas.push({
         caminho: '',
@@ -594,6 +705,8 @@ export async function executarCenario(
       await perfil.abandonar();
     }
     cancelarAssinaturas.forEach((cancelar) => cancelar());
+    // Restauração: sempre, também em erro e cancelamento, e antes de o debugger sair.
+    ambiente.aoRestaurar?.(await pilha.desfazerTudo());
     await cdp.desanexar();
   }
   return andamento;

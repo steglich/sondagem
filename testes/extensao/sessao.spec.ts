@@ -1,8 +1,6 @@
 import type { BrowserContext, Page, Worker } from '@playwright/test';
-import type { EstadoSessao } from '../../extensao/shared/types.ts';
+import { estadoGravado } from './apoio.ts';
 import { coletarErros, expect, test } from './fixtures.ts';
-
-const CHAVE_ESTADO = 'sondagem:sessao';
 
 /** Abre um caso da página de teste e o painel em aba própria, apontado para ela. */
 async function abrirPaginaEPainel(context: BrowserContext, serviceWorker: Worker, idExtensao: string, caminho: string) {
@@ -34,11 +32,6 @@ async function observarInjecoes(context: BrowserContext, pagina: Page) {
   });
   await cdp.send('Debugger.enable');
   return () => injecoes;
-}
-
-async function estadoGravado(serviceWorker: Worker): Promise<EstadoSessao | undefined> {
-  const itens = await serviceWorker.evaluate((chave) => chrome.storage.session.get(chave), CHAVE_ESTADO);
-  return itens[CHAVE_ESTADO] as EstadoSessao | undefined;
 }
 
 const scriptsRegistrados = (serviceWorker: Worker): Promise<number> =>

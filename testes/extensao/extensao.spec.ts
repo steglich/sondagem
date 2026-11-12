@@ -8,7 +8,7 @@ test('o service worker registra e configura a abertura do side panel pelo ícone
     permissoes: chrome.runtime.getManifest().permissions,
   }));
   expect(estado.comportamento.openPanelOnActionClick).toBe(true);
-  expect(estado.permissoes).toEqual(['sidePanel', 'storage', 'scripting', 'tabs', 'debugger']);
+  expect(estado.permissoes).toEqual(['sidePanel', 'storage', 'scripting', 'tabs', 'debugger', 'management']);
 });
 
 test('o painel renderiza pela URL direta, sem erros de console nem violações de CSP', async ({ context, idExtensao }) => {
